@@ -795,6 +795,7 @@ int tf_open_client_session(
 		if (connection->owner == TF_CONNECTION_OWNER_KERNEL) {
 			dprintk(KERN_DEBUG "tf_open_client_session: "
 				"TF_LOGIN_PRIVILEGED for kernel API\n");
+#ifndef CONFIG_MACH_TUNA
 		} else if ((current_euid() != TF_PRIVILEGED_UID_GID) &&
 			   (current_egid() != TF_PRIVILEGED_UID_GID) &&
 			   (current_euid() != 0) && (current_egid() != 0)) {
@@ -804,6 +805,7 @@ int tf_open_client_session(
 				current_euid(), current_egid());
 			error = -EACCES;
 			goto error;
+#endif
 		} else {
 			dprintk(KERN_DEBUG "tf_open_client_session: "
 				"TF_LOGIN_PRIVILEGED for %u:%u\n",
