@@ -58,6 +58,13 @@ int omap_tiler_vinfo(struct ion_client *client,
 			unsigned int *vsize);
 #endif /* __KERNEL__ */
 
+#ifdef CONFIG_CMA
+bool omap_ion_ipu_allocate_memory(void);
+bool omap_ion_ipu_free_memory(void);
+bool omap_ion_rpmsg_allocate_memory(void);
+bool omap_ion_rpmsg_free_memory(void);
+#endif
+
 /* additional heaps used only on omap */
 enum {
 	OMAP_ION_HEAP_TYPE_TILER = ION_HEAP_TYPE_CUSTOM + 1,

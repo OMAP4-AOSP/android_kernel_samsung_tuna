@@ -555,6 +555,11 @@ static inline int omap_rproc_start(struct rproc *rproc, u64 bootaddr)
 	rpp->bootaddr = bootaddr;
 #endif
 	ret = omap_device_enable(pdev);
+#ifdef CONFIG_CMA
+	if (ret) {
+		dev_err(rproc->dev, "failed to enable device: %d\n", ret);
+	}
+#endif
 out:
 	if (ret) {
 		while (i--) {
@@ -583,10 +588,20 @@ static int omap_rproc_iommu_exit(struct rproc *rproc)
 	return 0;
 }
 
+#ifdef CONFIG_CMA
+static inline struct omap_device *_find_by_pdev(struct platform_device *pdev)
+{
+	return container_of(pdev, struct omap_device, pdev);
+}
+#endif
+
 static inline int omap_rproc_stop(struct rproc *rproc)
 {
 	struct device *dev = rproc->dev;
 	struct platform_device *pdev = to_platform_device(dev);
+#ifdef CONFIG_CMA
+	struct omap_device *od = _find_by_pdev(pdev);
+#endif
 	struct omap_rproc_pdata *pdata = dev->platform_data;
 	struct omap_rproc_timers_info *timers = pdata->timers;
 	int ret, i;
@@ -602,9 +617,21 @@ static inline int omap_rproc_stop(struct rproc *rproc)
 		rproc->secure_reset = false;
 	}
 
+#ifdef CONFIG_CMA
+	/* We might be called from the suspended state,
+	 * in that case we shouldn't try to call omap_device_idle(). */
+	if (od->_state == OMAP_DEVICE_STATE_ENABLED) {
+		ret = omap_device_idle(pdev);
+		if (ret)
+			goto err;
+	} else {
+		ret = 0;
+	}
+#else
 	ret = omap_device_idle(pdev);
 	if (ret)
 		goto err;
+#endif
 
 	for (i = 0; i < pdata->timers_cnt; i++) {
 #ifdef CONFIG_REMOTEPROC_WATCHDOG

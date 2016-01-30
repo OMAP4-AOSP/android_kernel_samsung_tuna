@@ -35,11 +35,18 @@
 #include <linux/list.h>
 #include <linux/debugfs.h>
 #include <linux/remoteproc.h>
+#ifdef CONFIG_CMA
+#include <linux/rpmsg.h>
+#endif
 #include <linux/pm_runtime.h>
 #include <linux/uaccess.h>
 #include <linux/elf.h>
 #include <linux/elfcore.h>
 #include <plat/remoteproc.h>
+#ifdef CONFIG_CMA
+#include <linux/ion.h>
+#include <linux/omap_ion.h>
+#endif
 
 /* list of available remote processors on this board */
 static LIST_HEAD(rprocs);
@@ -1475,7 +1482,11 @@ int rproc_error_notify(struct rproc *rproc)
 }
 EXPORT_SYMBOL_GPL(rproc_error_notify);
 
+#ifdef CONFIG_CMA
+static struct rproc *_rproc_get(const char *name, bool use_refcounting)
+#else
 struct rproc *rproc_get(const char *name)
+#endif
 {
 	struct rproc *rproc, *ret = NULL;
 	struct device *dev;
@@ -1511,13 +1522,30 @@ struct rproc *rproc_get(const char *name)
 	}
 
 	/* bail if rproc is already powered up */
+#ifdef CONFIG_CMA
+	if (use_refcounting && rproc->count++) {
+		ret = rproc;
+		goto unlock_mutex;
+	}
+
+	if (use_refcounting && rproc->state != RPROC_OFFLINE) {
+		dev_info(dev, "redundant rproc restart request, ignoring\n");
+#else
 	if (rproc->count++) {
+#endif
 		ret = rproc;
 		goto unlock_mutex;
 	}
 
 	/* rproc_put() calls should wait until async loader completes */
 	init_completion(&rproc->firmware_loading_complete);
+
+#ifdef CONFIG_CMA
+	if (!omap_ion_ipu_allocate_memory()) {
+		ret = NULL;
+		goto unlock_mutex;
+	}
+#endif
 
 	dev_info(dev, "powering up %s\n", name);
 
@@ -1526,7 +1554,11 @@ struct rproc *rproc_get(const char *name)
 		dev_err(dev, "failed to load rproc %s\n", rproc->name);
 		complete_all(&rproc->firmware_loading_complete);
 		module_put(rproc->owner);
+#ifdef CONFIG_CMA
+		rproc->count -= (use_refcounting ? 1 : 0);
+#else
 		--rproc->count;
+#endif
 		goto unlock_mutex;
 	}
 
@@ -1537,9 +1569,20 @@ unlock_mutex:
 	mutex_unlock(&rproc->lock);
 	return ret;
 }
+
+#ifdef CONFIG_CMA
+struct rproc *rproc_get(const char *name)
+{
+	return _rproc_get(name, true);
+}
+#endif
 EXPORT_SYMBOL_GPL(rproc_get);
 
+#ifdef CONFIG_CMA
+static void _rproc_put(struct rproc *rproc, bool use_refcounting)
+#else
 void rproc_put(struct rproc *rproc)
+#endif
 {
 	struct device *dev = rproc->dev;
 	int ret;
@@ -1553,14 +1596,22 @@ void rproc_put(struct rproc *rproc)
 		return;
 	}
 
+#ifdef CONFIG_CMA
+	if (use_refcounting && !rproc->count) {
+#else
 	if (!rproc->count) {
+#endif
 		dev_warn(dev, "asymmetric rproc_put\n");
 		ret = -EINVAL;
 		goto out;
 	}
 
 	/* if the remote proc is still needed, bail out */
+#ifdef CONFIG_CMA
+	if (use_refcounting && --rproc->count)
+#else
 	if (--rproc->count)
+#endif
 		goto out;
 
 #ifdef CONFIG_MACH_TUNA
@@ -1603,8 +1654,14 @@ void rproc_put(struct rproc *rproc)
 		 * so that no callback is executed after the device is stopped.
 		 * Device stop function takes care of shutting down the device.
 		 */
+#ifdef CONFIG_CMA
+		if (use_refcounting) {
+#endif
 		pm_runtime_get_sync(rproc->dev);
 		pm_runtime_put_noidle(rproc->dev);
+#ifdef CONFIG_CMA
+		}
+#endif
 		if (!rproc->secure_reset)
 			pm_runtime_disable(rproc->dev);
 
@@ -1641,11 +1698,21 @@ void rproc_put(struct rproc *rproc)
 
 	dev_info(dev, "stopped remote processor %s\n", rproc->name);
 
+#ifdef CONFIG_CMA
+	omap_ion_ipu_free_memory();
+#endif
+
 out:
 	mutex_unlock(&rproc->lock);
 	if (!ret)
 		module_put(rproc->owner);
 }
+#ifdef CONFIG_CMA
+void rproc_put(struct rproc *rproc)
+{
+	return _rproc_put(rproc, true);
+}
+#endif
 EXPORT_SYMBOL_GPL(rproc_put);
 
 static void rproc_error_work(struct work_struct *work)
@@ -1668,6 +1735,10 @@ int rproc_event_unregister(struct rproc *rproc, struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(rproc_event_unregister);
 
+#ifdef CONFIG_CMA
+static int rproc_runtime_resume(struct device *dev);
+#endif
+
 void rproc_last_busy(struct rproc *rproc)
 {
 #ifdef CONFIG_REMOTE_PROC_AUTOSUSPEND
@@ -1689,6 +1760,13 @@ void rproc_last_busy(struct rproc *rproc)
 			mutex_unlock(&rproc->lock);
 			return;
 		}
+#ifdef CONFIG_CMA
+		if (rproc->state == RPROC_OFFLINE) {
+			mutex_unlock(&rproc->lock);
+			rproc_runtime_resume(dev);
+			return;
+		}
+#endif
 		mutex_unlock(&rproc->lock);
 		pm_runtime_get_sync(dev);
 		pm_runtime_mark_last_busy(dev);
@@ -1774,6 +1852,14 @@ out:
 	return ret;
 }
 
+#ifdef CONFIG_CMA
+static void rproc_unload_work(struct work_struct *work)
+{
+	struct rproc *rproc = container_of(work, struct rproc, unload_work);
+	_rproc_put(rproc, false);
+}
+#endif
+
 static int rproc_runtime_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
@@ -1781,6 +1867,14 @@ static int rproc_runtime_resume(struct device *dev)
 	int ret = 0;
 
 	dev_dbg(dev, "Enter %s\n", __func__);
+
+#ifdef CONFIG_CMA
+	if (rproc->state == RPROC_OFFLINE) {
+		dev_info(dev, "rproc_runtime_resume in RPROC_OFFLINE mode - waking up.\n");
+		_rproc_get(rproc->name, false);
+		rpmsg_reset_all_devices();
+	}
+#endif
 
 	if (rproc->ops->resume)
 		ret = rproc->ops->resume(rproc);
@@ -1845,6 +1939,11 @@ static int rproc_runtime_suspend(struct device *dev)
 	/* we are not interested in the returned value */
 	_event_notify(rproc, RPROC_POS_SUSPEND, NULL);
 	mutex_unlock(&rproc->pm_lock);
+
+#ifdef CONFIG_CMA
+	/* Unload firmware and free memory */
+	schedule_work(&rproc->unload_work);
+#endif
 
 	return 0;
 abort:
@@ -1941,6 +2040,9 @@ int rproc_register(struct device *dev, const char *name,
 	mutex_init(&rproc->tlock);
 #endif
 	INIT_WORK(&rproc->error_work, rproc_error_work);
+#ifdef CONFIG_CMA
+	INIT_WORK(&rproc->unload_work, rproc_unload_work);
+#endif
 	BLOCKING_INIT_NOTIFIER_HEAD(&rproc->nbh);
 
 	rproc->state = RPROC_OFFLINE;

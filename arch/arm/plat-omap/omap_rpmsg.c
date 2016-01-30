@@ -33,6 +33,10 @@
 #include <linux/memblock.h>
 #include <linux/remoteproc.h>
 #include <linux/delay.h>
+#ifdef CONFIG_CMA
+#include <linux/ion.h>
+#include <linux/omap_ion.h>
+#endif
 
 #include <asm/io.h>
 
@@ -53,7 +57,11 @@ struct omap_rpmsg_vproc {
 	struct rproc *rproc;
 	struct notifier_block nb;
 	struct notifier_block rproc_nb;
+#ifdef CONFIG_CMA
+	struct work_struct reset_work, reset_keep_rproc_work;
+#else
 	struct work_struct reset_work;
+#endif
 	bool slave_reset;
 	struct omap_rpmsg_vproc *slave_next;
 	struct virtqueue *vq[2];
@@ -581,17 +589,32 @@ static void omap_rpmsg_vproc_release(struct device *dev)
 	/* this handler is provided so driver core doesn't yell at us */
 }
 
+#ifdef CONFIG_CMA
+static void rpmsg_unregister_devices(struct omap_rpmsg_vproc *rpdev)
+#else
 static void rpmsg_reset_work(struct work_struct *work)
+#endif
 {
+#ifndef CONFIG_CMA
 	struct omap_rpmsg_vproc *rpdev =
 		container_of(work, struct omap_rpmsg_vproc, reset_work);
+#endif
 	struct omap_rpmsg_vproc *tmp;
+#ifndef CONFIG_CMA
 	int ret;
-
+#endif
 	for (tmp = rpdev; tmp; tmp = tmp->slave_next) {
 		pr_err("reseting virtio device %d\n", tmp->vdev.index);
 		unregister_virtio_device(&tmp->vdev);
 	}
+#ifdef CONFIG_CMA
+}
+
+static void rpmsg_register_devices(struct omap_rpmsg_vproc *rpdev)
+{
+	struct omap_rpmsg_vproc *tmp;
+	int ret;
+#endif
 	for (tmp = rpdev; tmp; tmp = tmp->slave_next) {
 		memset(&tmp->vdev.dev, 0, sizeof(struct device));
 		tmp->vdev.dev.release = omap_rpmsg_vproc_release;
@@ -600,6 +623,28 @@ static void rpmsg_reset_work(struct work_struct *work)
 			pr_err("error creating virtio device %d\n", ret);
 	}
 }
+
+#ifdef CONFIG_CMA
+static void rpmsg_reset_work(struct work_struct *work)
+{
+	struct omap_rpmsg_vproc *rpdev =
+		container_of(work, struct omap_rpmsg_vproc, reset_work);
+	rpmsg_unregister_devices(rpdev);
+	rpmsg_register_devices(rpdev);
+}
+
+static void rpmsg_reset_keep_rproc_work(struct work_struct *work)
+{
+	struct omap_rpmsg_vproc *rpdev =
+		container_of(work, struct omap_rpmsg_vproc, reset_keep_rproc_work);
+	/* Ensure there's extra reference to rproc so that
+	 * we don't trigger unload of the firmware. */
+	rproc_get(rpdev->rproc->name);
+	rpmsg_unregister_devices(rpdev);
+	rpmsg_register_devices(rpdev);
+	rproc_put(rpdev->rproc);
+}
+#endif
 
 #if defined(CONFIG_OMAP_REMOTE_PROC_IPU) || defined(CONFIG_OMAP_REMOTE_PROC_DSP) || defined(CONFIG_MACH_TUNA)
 static struct virtio_config_ops omap_rpmsg_config_ops = {
@@ -676,6 +721,20 @@ static struct omap_rpmsg_vproc omap_rpmsg_vprocs[] = {
 #endif
 };
 
+#ifdef CONFIG_CMA
+void rpmsg_reset_all_devices(void)
+{
+	int i;
+	for (i = 0; i < ARRAY_SIZE(omap_rpmsg_vprocs); i++) {
+		struct omap_rpmsg_vproc *rpdev = &omap_rpmsg_vprocs[i];
+		if (!rpdev->slave_reset) {
+			flush_work_sync(&rpdev->reset_keep_rproc_work);
+			schedule_work(&rpdev->reset_keep_rproc_work);
+		}
+	}
+}
+#endif
+
 static int __init omap_rpmsg_ini(void)
 {
 #ifdef CONFIG_MACH_TUNA
@@ -684,6 +743,13 @@ static int __init omap_rpmsg_ini(void)
 						OMAP_RPROC_MEMPOOL_STATIC);
 	phys_addr_t psize = omap_ipu_get_mempool_size(
 						OMAP_RPROC_MEMPOOL_STATIC);
+
+#ifdef CONFIG_CMA
+	if (!omap_ion_rpmsg_allocate_memory()) {
+		return -ENOMEM;
+	}
+#endif
+
 #else
 	int i, ret = 0, mret = 0;
 	phys_addr_t paddr = 0;
@@ -732,6 +798,9 @@ static int __init omap_rpmsg_ini(void)
 		rpdev->vring[0] = paddr + RPMSG_BUFS_SPACE;
 		rpdev->vring[1] = paddr + RPMSG_BUFS_SPACE + RPMSG_RING_SIZE;
 		INIT_WORK(&rpdev->reset_work, rpmsg_reset_work);
+#ifdef CONFIG_CMA
+		INIT_WORK(&rpdev->reset_keep_rproc_work, rpmsg_reset_keep_rproc_work);
+#endif
 
 		paddr += RPMSG_IPC_MEM;
 		psize -= RPMSG_IPC_MEM;
@@ -764,6 +833,9 @@ static void __exit omap_rpmsg_fini(void)
 
 		unregister_virtio_device(&rpdev->vdev);
 	}
+#ifdef CONFIG_CMA
+	omap_ion_rpmsg_free_memory();
+#endif
 }
 module_exit(omap_rpmsg_fini);
 

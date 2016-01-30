@@ -291,7 +291,11 @@ struct rproc {
 	struct mutex tlock;
 #endif
 	struct completion firmware_loading_complete;
+#ifdef CONFIG_CMA
+	struct work_struct error_work, unload_work;
+#else
 	struct work_struct error_work;
+#endif
 	struct blocking_notifier_head nbh;
 	struct completion error_comp;
 #ifdef CONFIG_REMOTE_PROC_AUTOSUSPEND

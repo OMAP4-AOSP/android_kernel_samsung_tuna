@@ -149,6 +149,9 @@ void rpmsg_destroy_ept(struct rpmsg_endpoint *);
 struct rpmsg_endpoint *rpmsg_create_ept(struct rpmsg_channel *,
 		void (*cb)(struct rpmsg_channel *, void *, int, void *, u32),
 		void *priv, u32 addr);
+#ifdef CONFIG_CMA
+void rpmsg_reset_all_devices(void);
+#endif
 
 int
 rpmsg_send_offchannel_raw(struct rpmsg_channel *, u32, u32, void *, int, bool);
