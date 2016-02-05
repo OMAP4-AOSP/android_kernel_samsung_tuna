@@ -20,6 +20,7 @@
 
 /* Hardcoded Ducati heap address. */
 #define ESPRESSO_DUCATI_HEAP_ADDR 0xbae00000
+#define TUNA_DUCATI_HEAP_ADDR 0xba300000
 
 /*
  * Carveouts from higher end of RAM
@@ -141,8 +142,12 @@ void __init omap_ion_init(void)
 	/* carveout addresses */
 	omap4_smc_addr = PLAT_PHYS_OFFSET + omap_total_ram_size() -
 				omap4_smc_size;
+#ifdef CONFIG_MACH_TUNA /* fixed start address of ducati heap */
+	omap4_ion_heap_secure_input_addr = TUNA_DUCATI_HEAP_ADDR;
+#else
 	omap4_ion_heap_secure_input_addr = omap4_smc_addr -
 				omap4_ion_heap_secure_input_size;
+#endif
 	omap4_ion_heap_secure_output_wfdhdcp_addr =
 				omap4_ion_heap_secure_input_addr -
 				omap4_ion_heap_secure_output_wfdhdcp_size;
