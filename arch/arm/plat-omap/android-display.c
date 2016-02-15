@@ -28,6 +28,33 @@
 #include <plat/dsscomp.h>
 #include <plat/vram.h>
 
+#ifdef CONFIG_MACH_TUNA
+/* Default IOBUFS size guaranteed that the memory used for early boot
+ * framebuffer will be overlapped by IOBUFS allocation, therefore
+ * won't be written to and there will be no extra output until video
+ * driver is initialized properly.
+ *
+ * With smaller IOBUFS size that framebuffer area becomes exposed
+ * to the system, hence the phone displays all the random garbabe
+ * that's in that memory region until video driver is initialized.
+ *
+ * While harmless, it looks ugly, so we'd better correct it. The
+ * easiest way to do it is to force VRAM allocation during the boot
+ * that overlaps with earlier framebuffer address.
+ *
+ * Given that for tuna devices lcd_bootfb equals 0xbea70000 at
+ * the boot and VRAM size is 7.5MB, allocating VRAM at 0xbea00000
+ * ensures that LCD range is fully covered.
+ *
+ * Cleaner solution would be to parse that parameter and calculate
+ * the necessary address dynamically, but for now hard-coded value
+ * will do. */
+#define OMAP_VRAM_START 0xbea00000
+/* Make sure we override VRAM region only if IOBUFS is small enough
+ * so that we don't overlap with it. */
+#define OMAP_MAX_IOBUFS_SIZE ((OMAP_VRAM_START - 0xba300000) / 1024 / 1024)
+#endif
+
 struct omap_android_display_data {
 	/* members with default values */
 	u32 width;
@@ -199,8 +226,15 @@ static void set_vram_sizes(struct sgx_omaplfb_config *sgx_config,
 				vram += fb->mem_desc.region[i].size;
 	}
 
+#ifdef CONFIG_MACH_TUNA
+	/* See comments above for OMAP_VRAM_START for justification. */
+	pr_info("android_display: setting vram to %u at address 0x%x\n",
+		vram, OMAP_VRAM_START);
+	omap_vram_set_sdram_vram(vram, OMAP_VRAM_START);
+#else
 	pr_info("android_display: setting vram to %u\n", vram);
 	omap_vram_set_sdram_vram(vram, 0);
+#endif
 }
 
 static void set_ion_carveouts(struct sgx_omaplfb_config *sgx_config,
