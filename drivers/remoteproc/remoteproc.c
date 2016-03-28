@@ -1515,6 +1515,9 @@ struct rproc *rproc_get(const char *name)
 		mutex_lock(&rproc->lock);
 	}
 
+#ifdef CONFIG_CMA
+	if (use_refcounting) {
+#endif
 	/* prevent underlying implementation from being removed */
 	if (!try_module_get(rproc->owner)) {
 		dev_err(dev, "%s: can't get owner\n", __func__);
@@ -1523,13 +1526,14 @@ struct rproc *rproc_get(const char *name)
 
 	/* bail if rproc is already powered up */
 #ifdef CONFIG_CMA
-	if (use_refcounting && rproc->count++) {
-		ret = rproc;
-		goto unlock_mutex;
+		if (rproc->count++) {
+			ret = rproc;
+			goto unlock_mutex;
+		}
 	}
 
-	if (use_refcounting && rproc->state != RPROC_OFFLINE) {
-		dev_info(dev, "redundant rproc restart request, ignoring\n");
+	if (rproc->state != RPROC_OFFLINE) {
+		dev_err(dev, "requested rproc start from non-OFFLINE mode: %d, ignoring\n", rproc->state);
 #else
 	if (rproc->count++) {
 #endif
@@ -1553,10 +1557,13 @@ struct rproc *rproc_get(const char *name)
 	if (err) {
 		dev_err(dev, "failed to load rproc %s\n", rproc->name);
 		complete_all(&rproc->firmware_loading_complete);
-		module_put(rproc->owner);
 #ifdef CONFIG_CMA
-		rproc->count -= (use_refcounting ? 1 : 0);
+		if (use_refcounting) {
+			module_put(rproc->owner);
+			--rproc->count;
+		}
 #else
+		module_put(rproc->owner);
 		--rproc->count;
 #endif
 		goto unlock_mutex;
@@ -1689,22 +1696,28 @@ void rproc_put(struct rproc *rproc)
 				goto out;
 			}
 		}
+#ifdef CONFIG_CMA
+		omap_ion_ipu_free_memory();
+#endif
 	}
 
 	if (rproc->state == RPROC_CRASHED)
 		complete_all(&rproc->error_comp);
 
 	rproc->state = RPROC_OFFLINE;
+#ifdef CONFIG_CMA
+	rproc->need_restart = !use_refcounting;
+#endif
 
 	dev_info(dev, "stopped remote processor %s\n", rproc->name);
 
-#ifdef CONFIG_CMA
-	omap_ion_ipu_free_memory();
-#endif
-
 out:
 	mutex_unlock(&rproc->lock);
+#ifdef CONFIG_CMA
+	if (!ret && use_refcounting)
+#else
 	if (!ret)
+#endif
 		module_put(rproc->owner);
 }
 #ifdef CONFIG_CMA
@@ -1736,7 +1749,7 @@ int rproc_event_unregister(struct rproc *rproc, struct notifier_block *nb)
 EXPORT_SYMBOL_GPL(rproc_event_unregister);
 
 #ifdef CONFIG_CMA
-static int rproc_runtime_resume(struct device *dev);
+static void rproc_restart(struct rproc *rproc);
 #endif
 
 void rproc_last_busy(struct rproc *rproc)
@@ -1744,6 +1757,23 @@ void rproc_last_busy(struct rproc *rproc)
 #ifdef CONFIG_REMOTE_PROC_AUTOSUSPEND
 	struct device *dev = rproc->dev;
 
+#ifdef CONFIG_CMA
+	mutex_lock(&rproc->lock);
+	if (rproc->need_restart) {
+		WARN_ONCE(rproc->state != RPROC_OFFLINE, "Requested restart in non-OFFLINE mode: %d", rproc->state);
+		rproc->need_restart = false;
+		mutex_unlock(&rproc->lock);
+
+		mutex_lock(&rproc->pm_lock);
+		pm_runtime_mark_last_busy(dev);
+		mutex_unlock(&rproc->pm_lock);
+
+		rproc_restart(rproc);
+		return;
+	} else {
+		mutex_unlock(&rproc->lock);
+	}
+#endif
 	mutex_lock(&rproc->pm_lock);
 	if (pm_runtime_suspended(dev) ||
 			!pm_runtime_autosuspend_expiration(dev)) {
@@ -1760,13 +1790,6 @@ void rproc_last_busy(struct rproc *rproc)
 			mutex_unlock(&rproc->lock);
 			return;
 		}
-#ifdef CONFIG_CMA
-		if (rproc->state == RPROC_OFFLINE) {
-			mutex_unlock(&rproc->lock);
-			rproc_runtime_resume(dev);
-			return;
-		}
-#endif
 		mutex_unlock(&rproc->lock);
 		pm_runtime_get_sync(dev);
 		pm_runtime_mark_last_busy(dev);
@@ -1868,14 +1891,6 @@ static int rproc_runtime_resume(struct device *dev)
 
 	dev_dbg(dev, "Enter %s\n", __func__);
 
-#ifdef CONFIG_CMA
-	if (rproc->state == RPROC_OFFLINE) {
-		dev_info(dev, "rproc_runtime_resume in RPROC_OFFLINE mode - waking up.\n");
-		_rproc_get(rproc->name, false);
-		rpmsg_reset_all_devices();
-	}
-#endif
-
 	if (rproc->ops->resume)
 		ret = rproc->ops->resume(rproc);
 
@@ -1884,6 +1899,21 @@ static int rproc_runtime_resume(struct device *dev)
 
 	return 0;
 }
+
+#ifdef CONFIG_CMA
+static void rproc_restart(struct rproc *rproc)
+{
+	dev_info(rproc->dev, "%s: restarting rproc.\n", __func__);
+	/* Reload firmware and start remote processor. */
+	_rproc_get(rproc->name, false);
+	/* Remote processor will try to re-create rpmsg channels
+	 * on restart, therefore reset devices and channels so that
+	 * new ones can be created. */
+	rpmsg_reset_all_devices();
+	/* Needed for omap_rpmsg to set mbox handle. */
+	rproc_runtime_resume(rproc->dev);
+}
+#endif
 
 static int rproc_runtime_suspend(struct device *dev)
 {
@@ -2046,6 +2076,9 @@ int rproc_register(struct device *dev, const char *name,
 	BLOCKING_INIT_NOTIFIER_HEAD(&rproc->nbh);
 
 	rproc->state = RPROC_OFFLINE;
+#ifdef CONFIG_CMA
+ 	rproc->need_restart = false;
+#endif
 
 	rproc->qos_request = kzalloc(sizeof(*rproc->qos_request),
 			GFP_KERNEL);
