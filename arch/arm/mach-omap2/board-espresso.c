@@ -368,6 +368,28 @@ err_board_obj:
 		pr_err("failed to create board_properties\n");
 }
 
+static void __init espresso_create_board_type_prop(void)
+{
+	struct kobject *board_kobj;
+	int ret = 0;
+
+	board_kobj = kobject_create_and_add("board", NULL);
+	if (!board_kobj)
+		goto err_board_obj;
+
+	ret = sysfs_create_group(board_kobj, &espresso_board_prop_attr_group);
+	if (ret)
+		goto err_board_sysfs_create;
+
+	return;
+
+err_board_sysfs_create:
+	kobject_put(board_kobj);
+err_board_obj:
+	if (!board_kobj || ret)
+		pr_err("failed to create espresso board properties\n");
+}
+
 static void __init sec_common_init(void)
 {
 	sec_class = class_create(THIS_MODULE, "sec");
@@ -396,6 +418,8 @@ static void __init espresso_init(void)
 
 	/* initialize board props */
 	omap4_espresso_create_board_props();
+	/* resolve 3.0/3.4 kernel madness about board properties sysfs */
+	espresso_create_board_type_prop();
 
 	/* initialize each drivers */
 	omap4_espresso_serial_init();
