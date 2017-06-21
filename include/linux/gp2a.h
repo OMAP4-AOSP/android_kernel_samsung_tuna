@@ -27,6 +27,10 @@
 struct gp2a_platform_data {
 	int p_out;  /* proximity-sensor-output gpio */
 	void (*power)(bool); /* power to the chip */
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	void (*led_on)(bool); /* power to the led */
+	void (*ldo_on)(bool); /* power to the sensor ldo */
+#endif
 	int (*light_adc_value)(void); /* get light level from adc */
 };
 #endif /* __KERNEL__ */

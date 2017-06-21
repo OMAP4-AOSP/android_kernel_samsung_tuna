@@ -541,6 +541,12 @@ config OPTICAL_GP2A
 	help
 	  This option enables proximity & light sensors using gp2a driver.
 
+config GP2A_MODE_B
+	bool "GP2A MODE B"
+	depends on OPTICAL_GP2A && MACH_OMAP4_ESPRESSO
+	help
+	  This option enables proximity mode B
+
 config INPUT_BMA180
 	bool "BMA-180 Tri-axis accelerometer"
 	depends on I2C && SYSFS

@@ -34,6 +34,10 @@
 #include <linux/uaccess.h>
 #include <linux/gp2a.h>
 
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+#include <linux/sensors_core.h>
+#include <linux/regulator/consumer.h>
+#endif
 
 /* Note about power vs enable/disable:
  *  The chip has two functions, proximity and ambient light sensing.
@@ -59,12 +63,20 @@
 #define REGS_CYCLE		0x3 /* Write Only */
 #define REGS_OPMOD		0x4 /* Write Only */
 
+#if defined(CONFIG_GP2A_MODE_B) && defined(CONFIG_MACH_OMAP4_ESPRESSO)
+#define REGS_CON	0x6 /* Write Only */
+#endif
+
 /* sensor type */
 #define LIGHT           0
 #define PROXIMITY	1
 #define ALL		2
 
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+#define DELAY_LOWBOUND	(100 * NSEC_PER_MSEC)
+#else
 #define DELAY_LOWBOUND	(5 * NSEC_PER_MSEC)
+#endif
 
 /* start time delay for light sensor in nano seconds */
 #define LIGHT_SENSOR_START_TIME_DELAY 50000000
@@ -76,7 +88,15 @@ static u8 reg_defaults[5] = {
 	0x04, /* CYCLE: */
 	0x01, /* OPMOD: normal operating mode */
 };
-
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+static u8 reg_b_mode[5] = {
+	0x00, /* PROX: read only register */
+	0x08, /* GAIN: large LED drive level */
+	0x40, /* HYS: receiver sensitivity */
+	0x04, /* CYCLE: */
+	0x03, /* OPMOD: normal operating mode */
+};
+#endif
 enum {
 	LIGHT_ENABLED = BIT(0),
 	PROXIMITY_ENABLED = BIT(1),
@@ -90,6 +110,9 @@ struct gp2a_data {
 	struct i2c_client *i2c_client;
 	int irq;
 	struct work_struct work_light;
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	struct work_struct work_prox;
+#endif
 	struct hrtimer timer;
 	ktime_t light_poll_delay;
 	bool on;
@@ -97,16 +120,74 @@ struct gp2a_data {
 	struct mutex power_lock;
 	struct wake_lock prx_wake_lock;
 	struct workqueue_struct *wq;
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	struct workqueue_struct *prox_wq;
+	int prox_state;
+	struct device *light_sensor_device;
+	struct device *proximity_sensor_device;
+};
+
+int gp2a_i2c_read(struct gp2a_data *gp2a, u8 reg, u8 *val)
+{
+
+	int err;
+	u8 buf[1];
+	struct i2c_msg msg[2];
+	struct i2c_client *client = gp2a->i2c_client;
+	int retry = 2;
+
+	buf[0] = reg;
+
+	msg[0].addr = client->addr;
+	msg[0].flags = 1;
+	msg[0].len = 2;
+	msg[0].buf = buf;
+
+	do {
+		err = i2c_transfer(client->adapter, msg, 1);
+		if (unlikely(err < 0))
+			pr_err("%s, slave addr=%02x, reg addr=%02x, err = %d\n",
+				__func__, client->addr, reg, err);
+	} while (unlikely(err < 0) && retry--);
+	if (likely(err >= 0))
+		*val = buf[1];
+	return err;
+#endif
 };
 
 int gp2a_i2c_write(struct gp2a_data *gp2a, u8 reg, u8 *val)
 {
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	int err;
+	int retry = 2;
+#else
 	int err = 0;
+	int retry = 10;
+#endif
 	struct i2c_msg msg[1];
 	unsigned char data[2];
-	int retry = 10;
 	struct i2c_client *client = gp2a->i2c_client;
 
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	if (unlikely((client == NULL) || (!client->adapter))) {
+		err = -ENODEV;
+		goto done;
+	}
+
+	data[0] = reg;
+	data[1] = *val;
+	msg->addr = client->addr;
+	msg->flags = 0; /* write */
+	msg->len = 2;
+	msg->buf = data;
+
+	do {
+		err = i2c_transfer(client->adapter, msg, 1);
+		if (err >= 0)
+			err = 0;
+	} while (unlikely(err < 0) && retry--);
+done:
+#else
 	if ((client == NULL) || (!client->adapter))
 		return -ENODEV;
 
@@ -124,6 +205,7 @@ int gp2a_i2c_write(struct gp2a_data *gp2a, u8 reg, u8 *val)
 		if (err >= 0)
 			return 0;
 	}
+#endif
 	return err;
 }
 
@@ -225,14 +307,22 @@ static ssize_t light_enable_store(struct device *dev,
 	gp2a_dbgmsg("new_value = %d, old state = %d\n",
 		    new_value, (gp2a->power_state & LIGHT_ENABLED) ? 1 : 0);
 	if (new_value && !(gp2a->power_state & LIGHT_ENABLED)) {
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+		if (!gp2a->power_state && gp2a->pdata->power)
+#else
 		if (!gp2a->power_state)
+#endif
 			gp2a->pdata->power(true);
 		gp2a->power_state |= LIGHT_ENABLED;
 		gp2a_light_enable(gp2a);
 	} else if (!new_value && (gp2a->power_state & LIGHT_ENABLED)) {
 		gp2a_light_disable(gp2a);
 		gp2a->power_state &= ~LIGHT_ENABLED;
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+		if (!gp2a->power_state && gp2a->pdata->power)
+#else
 		if (!gp2a->power_state)
+#endif
 			gp2a->pdata->power(false);
 	}
 	mutex_unlock(&gp2a->power_lock);
@@ -245,6 +335,9 @@ static ssize_t proximity_enable_store(struct device *dev,
 {
 	struct gp2a_data *gp2a = dev_get_drvdata(dev);
 	bool new_value;
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	u8 value;
+#endif
 
 	if (sysfs_streq(buf, "1"))
 		new_value = true;
@@ -259,26 +352,95 @@ static ssize_t proximity_enable_store(struct device *dev,
 	gp2a_dbgmsg("new_value = %d, old state = %d\n",
 		    new_value, (gp2a->power_state & PROXIMITY_ENABLED) ? 1 : 0);
 	if (new_value && !(gp2a->power_state & PROXIMITY_ENABLED)) {
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+		if (!gp2a->power_state && gp2a->pdata->power)
+#else
 		if (!gp2a->power_state)
+#endif
 			gp2a->pdata->power(true);
 		gp2a->power_state |= PROXIMITY_ENABLED;
+
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+		input_report_abs(gp2a->proximity_input_dev, ABS_DISTANCE, 2);
+		input_sync(gp2a->proximity_input_dev);
+
+		input_report_abs(gp2a->proximity_input_dev, ABS_DISTANCE, 1);
+		input_sync(gp2a->proximity_input_dev);
+#endif
+
 		enable_irq(gp2a->irq);
 		enable_irq_wake(gp2a->irq);
 		gp2a_i2c_write(gp2a, REGS_GAIN, &reg_defaults[1]);
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+		value = 0x40;
+		gp2a_i2c_write(gp2a, REGS_HYS, &value);
+#else
 		gp2a_i2c_write(gp2a, REGS_HYS, &reg_defaults[2]);
+#endif
 		gp2a_i2c_write(gp2a, REGS_CYCLE, &reg_defaults[3]);
 		gp2a_i2c_write(gp2a, REGS_OPMOD, &reg_defaults[4]);
 	} else if (!new_value && (gp2a->power_state & PROXIMITY_ENABLED)) {
 		disable_irq_wake(gp2a->irq);
 		disable_irq(gp2a->irq);
+#if defined(CONFIG_GP2A_MODE_B) && defined(CONFIG_MACH_OMAP4_ESPRESSO)
+		value = 0x02;	/* VCON enable, SSD disable */
+		gp2a_i2c_write(gp2a, REGS_OPMOD, &value);
+#else
 		gp2a_i2c_write(gp2a, REGS_OPMOD, &reg_defaults[0]);
+#endif
 		gp2a->power_state &= ~PROXIMITY_ENABLED;
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+		if (!gp2a->power_state && gp2a->pdata->power)
+#else
 		if (!gp2a->power_state)
+#endif
 			gp2a->pdata->power(false);
 	}
 	mutex_unlock(&gp2a->power_lock);
 	return size;
 }
+
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+static ssize_t gp2a_proximity_state_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct gp2a_data *gp2a = dev_get_drvdata(dev);
+	return sprintf(buf, "%u\n", gp2a->prox_state);
+}
+
+static ssize_t gp2a_light_sensor_lux_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct gp2a_data *gp2a = dev_get_drvdata(dev);
+	int adc = gp2a->pdata->light_adc_value();
+	if (adc < 8)
+		adc = 0;
+	msleep(50);
+	return sprintf(buf, "%d\n", adc);
+}
+static ssize_t gp2a_light_vendor_show(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	return sprintf(buf, "%s\n", "SHARP");
+}
+static struct device_attribute dev_attr_light_sensor_vendor =
+	__ATTR(vendor, S_IRUSR | S_IRGRP, gp2a_light_vendor_show, NULL);
+static struct device_attribute dev_attr_proximity_sensor_vendor =
+	__ATTR(vendor, S_IRUSR | S_IRGRP, gp2a_light_vendor_show, NULL);
+
+
+static ssize_t gp2a_light_name_show(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	return sprintf(buf, "%s\n", "GP2AP002");
+}
+static struct device_attribute dev_attr_light_sensor_name =
+	__ATTR(name, S_IRUSR | S_IRGRP, gp2a_light_name_show, NULL);
+static struct device_attribute dev_attr_proximity_sensor_name =
+	__ATTR(name, S_IRUSR | S_IRGRP, gp2a_light_name_show, NULL);
+#endif
 
 static DEVICE_ATTR(poll_delay, S_IRUGO | S_IWUSR | S_IWGRP,
 		   poll_delay_show, poll_delay_store);
@@ -290,6 +452,18 @@ static struct device_attribute dev_attr_light_enable =
 static struct device_attribute dev_attr_proximity_enable =
 	__ATTR(enable, S_IRUGO | S_IWUSR | S_IWGRP,
 	       proximity_enable_show, proximity_enable_store);
+
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+static struct device_attribute dev_attr_light_sensor_lux =
+	__ATTR(lux, S_IRUSR | S_IRGRP, gp2a_light_sensor_lux_show, NULL);
+static struct device_attribute dev_attr_light_sensor_raw_data =
+	__ATTR(raw_data, S_IRUSR | S_IRGRP, gp2a_light_sensor_lux_show, NULL);
+
+static struct device_attribute dev_attr_proximity_sensor_state =
+	__ATTR(state, S_IRUSR | S_IRGRP, gp2a_proximity_state_show, NULL);
+static struct device_attribute dev_attr_proximity_sensor_raw_data =
+	__ATTR(raw_data, S_IRUSR | S_IRGRP, gp2a_proximity_state_show, NULL);
+#endif
 
 static struct attribute *light_sysfs_attrs[] = {
 	&dev_attr_light_enable.attr,
@@ -310,6 +484,24 @@ static struct attribute_group proximity_attribute_group = {
 	.attrs = proximity_sysfs_attrs,
 };
 
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+static struct device_attribute *additional_light_attrs[] = {
+	&dev_attr_light_sensor_lux,
+	&dev_attr_light_sensor_raw_data,
+	&dev_attr_light_sensor_vendor,
+	&dev_attr_light_sensor_name,
+	NULL,
+};
+
+static struct device_attribute *additional_proximity_attrs[] = {
+	&dev_attr_proximity_sensor_state,
+	&dev_attr_proximity_sensor_raw_data,
+	&dev_attr_proximity_sensor_vendor,
+	&dev_attr_proximity_sensor_name,
+	NULL,
+};
+#endif
+
 static void gp2a_work_func_light(struct work_struct *work)
 {
 	struct gp2a_data *gp2a = container_of(work, struct gp2a_data,
@@ -319,8 +511,16 @@ static void gp2a_work_func_light(struct work_struct *work)
 		pr_err("adc returned error %d\n", adc);
 		return;
 	}
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	if (!adc)
+		adc = 1;
+#endif
 	gp2a_dbgmsg("adc returned light value %d\n", adc);
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	input_report_rel(gp2a->light_input_dev, REL_MISC, adc);
+#else
 	input_report_abs(gp2a->light_input_dev, ABS_MISC, adc);
+#endif
 	input_sync(gp2a->light_input_dev);
 }
 
@@ -336,11 +536,83 @@ static enum hrtimer_restart gp2a_timer_func(struct hrtimer *timer)
 	return HRTIMER_RESTART;
 }
 
+#if defined(CONFIG_GP2A_MODE_B) && defined(CONFIG_MACH_OMAP4_ESPRESSO)
+static void gp2a_work_func_prox(struct work_struct *work)
+{
+	struct gp2a_data *gp2a = container_of(work, struct gp2a_data,
+						work_prox);
+	unsigned char value;
+	unsigned char int_val;
+	unsigned char vout;
+
+	int_val = REGS_PROX | (1 << 7);
+
+	gp2a_i2c_read(gp2a, int_val, &value);
+	vout = value & 0x01;
+	pr_info("[PROXIMITY] value = %d\n", vout);
+
+	wake_lock_timeout(&gp2a->prx_wake_lock, 3*HZ);
+
+	/* Report proximity information */
+	gp2a->prox_state = !vout;
+	/* 0 is close, 1 is far */
+	input_report_abs(gp2a->proximity_input_dev, ABS_DISTANCE, !vout);
+	input_sync(gp2a->proximity_input_dev);
+
+	mdelay(1);
+
+	/* Write HYS Register */
+	if (!vout)
+		value = 0x40;
+	else
+		value = 0x20;
+
+	gp2a_i2c_write(gp2a, REGS_HYS, &value);
+
+	enable_irq(gp2a->irq);
+
+	/* enabling VOUT terminal in nomal operation */
+	value = 0x00;
+
+	gp2a_i2c_write(gp2a, REGS_CON, &value);
+
+}
+#endif
+
 /* interrupt happened due to transition/change of near/far proximity state */
 irqreturn_t gp2a_irq_handler(int irq, void *data)
 {
+
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	struct gp2a_data *gp2a = data;
+
+#if defined(CONFIG_GP2A_MODE_B)
+	pr_info("[PROXIMITY] gp2a->irq = %d\n", gp2a->irq);
+	if (gp2a->irq != -1) {
+		disable_irq_nosync(gp2a->irq);
+		pr_info("[PROXIMITY] disable_irq\n");
+		queue_work(gp2a->prox_wq, &gp2a->work_prox);
+	}
+#else
+	int val = gpio_get_value(gp2a->pdata->p_out);
+
+	if (val < 0) {
+		pr_err("%s: gpio_get_value error %d\n", __func__, val);
+		return IRQ_HANDLED;
+	}
+	gp2a->prox_state = !val;
+	gp2a_dbgmsg("gp2a: proximity val=%d\n", val);
+
+	/* 0 is close, 1 is far */
+	input_report_abs(gp2a->proximity_input_dev, ABS_DISTANCE, val);
+	input_sync(gp2a->proximity_input_dev);
+	wake_lock_timeout(&gp2a->prx_wake_lock, 3*HZ);
+#endif
+#else
 	struct gp2a_data *ip = data;
+
 	int val = gpio_get_value(ip->pdata->p_out);
+
 	if (val < 0) {
 		pr_err("%s: gpio_get_value error %d\n", __func__, val);
 		return IRQ_HANDLED;
@@ -352,6 +624,8 @@ irqreturn_t gp2a_irq_handler(int irq, void *data)
 	input_report_abs(ip->proximity_input_dev, ABS_DISTANCE, val);
 	input_sync(ip->proximity_input_dev);
 	wake_lock_timeout(&ip->prx_wake_lock, 3*HZ);
+#endif
+
 	return IRQ_HANDLED;
 }
 
@@ -362,6 +636,10 @@ static int gp2a_setup_irq(struct gp2a_data *gp2a)
 	int irq;
 
 	gp2a_dbgmsg("start\n");
+
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	gpio_free(pdata->p_out);
+#endif
 
 	rc = gpio_request(pdata->p_out, "gpio_proximity_out");
 	if (rc < 0) {
@@ -415,6 +693,9 @@ static int gp2a_i2c_probe(struct i2c_client *client,
 	struct input_dev *input_dev;
 	struct gp2a_data *gp2a;
 	struct gp2a_platform_data *pdata = client->dev.platform_data;
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	u8 value;
+#endif
 
 	if (!pdata) {
 		pr_err("%s: missing pdata!\n", __func__);
@@ -440,7 +721,29 @@ static int gp2a_i2c_probe(struct i2c_client *client,
 	gp2a->i2c_client = client;
 	i2c_set_clientdata(client, gp2a);
 
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	if (pdata->ldo_on != NULL)
+		pdata->ldo_on(true);
 
+	if (pdata->led_on != NULL)
+		pdata->led_on(true);
+
+	ret = gp2a_i2c_read(gp2a, REGS_PROX, &value);
+	if (ret < 0) {
+		pr_err("%s: can't access i2c\n", __func__);
+		goto err_i2c_access_fail;
+	}
+
+#if defined(CONFIG_GP2A_MODE_B)
+	gp2a->prox_wq = create_singlethread_workqueue("gp2a_wq_prox");
+	if (!gp2a->prox_wq) {
+		ret = -ENOMEM;
+		pr_err("%s: could not create porx workqueue\n", __func__);
+		goto err_create_prox_workqueue;
+	}
+	INIT_WORK(&gp2a->work_prox, gp2a_work_func_prox);
+#endif
+#endif
 	wake_lock_init(&gp2a->prx_wake_lock, WAKE_LOCK_SUSPEND,
 		"prx_wake_lock");
 	mutex_init(&gp2a->power_lock);
@@ -451,10 +754,24 @@ static int gp2a_i2c_probe(struct i2c_client *client,
 		pr_err("%s: could not allocate input device\n", __func__);
 		goto err_input_allocate_device_proximity;
 	}
+
+#if defined(CONFIG_GP2A_MODE_B) && defined(CONFIG_MACH_OMAP4_ESPRESSO)
+	gp2a_i2c_write(gp2a, REGS_GAIN, &reg_b_mode[1]);
+	gp2a_i2c_write(gp2a, REGS_HYS, &reg_b_mode[2]);
+	gp2a_i2c_write(gp2a, REGS_CYCLE, &reg_b_mode[3]);
+	gp2a_i2c_write(gp2a, REGS_OPMOD, &reg_b_mode[4]);
+#endif
 	gp2a->proximity_input_dev = input_dev;
 	input_set_drvdata(input_dev, gp2a);
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	input_dev->name = "proximity_sensor";
+#else
 	input_dev->name = "proximity";
+#endif
 	input_set_capability(input_dev, EV_ABS, ABS_DISTANCE);
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	input_set_abs_params(input_dev, ABS_DISTANCE, 0, 2, 0, 0);
+#else
 	input_set_abs_params(input_dev, ABS_DISTANCE, 0, 1, 0, 0);
 
 	ret = gp2a_setup_irq(gp2a);
@@ -463,14 +780,25 @@ static int gp2a_i2c_probe(struct i2c_client *client,
 		input_free_device(input_dev);
 		goto err_setup_irq;
 	}
-
+#endif
 	gp2a_dbgmsg("registering proximity input device\n");
 	ret = input_register_device(input_dev);
 	if (ret < 0) {
 		pr_err("%s: could not register input device\n", __func__);
+#ifndef CONFIG_MACH_OMAP4_ESPRESSO
 		input_free_device(input_dev);
+#endif
 		goto err_input_register_device_proximity;
 	}
+
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	ret = gp2a_setup_irq(gp2a);
+	if (ret) {
+		pr_err("%s: could not setup irq\n", __func__);
+		goto err_setup_irq;
+	}
+#endif
+
 	ret = sysfs_create_group(&input_dev->dev.kobj,
 				 &proximity_attribute_group);
 	if (ret) {
@@ -482,6 +810,9 @@ static int gp2a_i2c_probe(struct i2c_client *client,
 	hrtimer_init(&gp2a->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	gp2a->light_poll_delay = ns_to_ktime(200 * NSEC_PER_MSEC);
 	gp2a->timer.function = gp2a_timer_func;
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	gp2a->prox_state = 0;
+#endif
 
 	/* the timer just fires off a work queue request.  we need a thread
 	 * to read the i2c (can be slow and blocking)
@@ -503,9 +834,14 @@ static int gp2a_i2c_probe(struct i2c_client *client,
 		goto err_input_allocate_device_light;
 	}
 	input_set_drvdata(input_dev, gp2a);
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	input_dev->name = "light_sensor";
+	input_set_capability(input_dev, EV_REL, REL_MISC);
+#else
 	input_dev->name = "lightsensor-level";
 	input_set_capability(input_dev, EV_ABS, ABS_MISC);
 	input_set_abs_params(input_dev, ABS_MISC, 0, 1023, 8, 0);
+#endif
 
 	gp2a_dbgmsg("registering lightsensor-level input device\n");
 	ret = input_register_device(input_dev);
@@ -521,11 +857,41 @@ static int gp2a_i2c_probe(struct i2c_client *client,
 		pr_err("%s: could not create sysfs group\n", __func__);
 		goto err_sysfs_create_group_light;
 	}
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	ret = sensors_register(gp2a->light_sensor_device,
+		gp2a, additional_light_attrs, "light_sensor");
+	if (ret) {
+		pr_err("%s: cound not register sensor device\n", __func__);
+		goto err_sysfs_create_factory_light;
+	}
+	ret = sensors_register(gp2a->proximity_sensor_device,
+		gp2a, additional_proximity_attrs, "proximity_sensor");
+	if (ret) {
+		pr_err("%s: cound not register sensor device\n", __func__);
+		goto err_sysfs_create_factory_proximity;
+	}
+
+#ifdef CONFIG_GP2A_MODE_B
+	value = 0x02;	/* VCON enable, SSD disable */
+	gp2a_i2c_write(gp2a, REGS_OPMOD, &value);
+#endif
+#endif
+
 	goto done;
 
 	/* error, unwind it all */
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+err_sysfs_create_factory_proximity:
+	sensors_unregister(gp2a->light_sensor_device);
+err_sysfs_create_factory_light:
+	sysfs_remove_group(&input_dev->dev.kobj,
+			   &light_attribute_group);
+#endif
 err_sysfs_create_group_light:
 	input_unregister_device(gp2a->light_input_dev);
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	input_free_device(gp2a->light_input_dev);
+#endif
 err_input_register_device_light:
 err_input_allocate_device_light:
 	destroy_workqueue(gp2a->wq);
@@ -533,14 +899,30 @@ err_create_workqueue:
 	sysfs_remove_group(&gp2a->proximity_input_dev->dev.kobj,
 			   &proximity_attribute_group);
 err_sysfs_create_group_proximity:
+#ifndef CONFIG_MACH_OMAP4_ESPRESSO
 	input_unregister_device(gp2a->proximity_input_dev);
 err_input_register_device_proximity:
+#endif
 	free_irq(gp2a->irq, gp2a);
 	gpio_free(gp2a->pdata->p_out);
 err_setup_irq:
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	input_unregister_device(gp2a->proximity_input_dev);
+err_input_register_device_proximity:
+	input_free_device(gp2a->proximity_input_dev);
+#endif
 err_input_allocate_device_proximity:
 	mutex_destroy(&gp2a->power_lock);
 	wake_lock_destroy(&gp2a->prx_wake_lock);
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	destroy_workqueue(gp2a->prox_wq);
+err_create_prox_workqueue:
+err_i2c_access_fail:
+	if (pdata->led_on != NULL)
+		pdata->led_on(false);
+	if (pdata->ldo_on != NULL)
+		pdata->ldo_on(false);
+#endif
 	kfree(gp2a);
 done:
 	return ret;
@@ -557,7 +939,11 @@ static int gp2a_suspend(struct device *dev)
 	struct gp2a_data *gp2a = i2c_get_clientdata(client);
 	if (gp2a->power_state & LIGHT_ENABLED)
 		gp2a_light_disable(gp2a);
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	if (gp2a->power_state == LIGHT_ENABLED && gp2a->pdata->power)
+#else
 	if (gp2a->power_state == LIGHT_ENABLED)
+#endif
 		gp2a->pdata->power(false);
 	return 0;
 }
@@ -567,7 +953,11 @@ static int gp2a_resume(struct device *dev)
 	/* Turn power back on if we were before suspend. */
 	struct i2c_client *client = to_i2c_client(dev);
 	struct gp2a_data *gp2a = i2c_get_clientdata(client);
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	if (gp2a->power_state == LIGHT_ENABLED && gp2a->pdata->power)
+#else
 	if (gp2a->power_state == LIGHT_ENABLED)
+#endif
 		gp2a->pdata->power(true);
 	if (gp2a->power_state & LIGHT_ENABLED)
 		gp2a_light_enable(gp2a);
@@ -577,6 +967,10 @@ static int gp2a_resume(struct device *dev)
 static int gp2a_i2c_remove(struct i2c_client *client)
 {
 	struct gp2a_data *gp2a = i2c_get_clientdata(client);
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	sensors_unregister(gp2a->proximity_sensor_device);
+	sensors_unregister(gp2a->light_sensor_device);
+#endif
 	sysfs_remove_group(&gp2a->light_input_dev->dev.kobj,
 			   &light_attribute_group);
 	sysfs_remove_group(&gp2a->proximity_input_dev->dev.kobj,
@@ -590,13 +984,36 @@ static int gp2a_i2c_remove(struct i2c_client *client)
 		gp2a->power_state = 0;
 		if (gp2a->power_state & LIGHT_ENABLED)
 			gp2a_light_disable(gp2a);
-		gp2a->pdata->power(false);
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+		if (gp2a->pdata->power)
+#endif
+			gp2a->pdata->power(false);
 	}
 	mutex_destroy(&gp2a->power_lock);
 	wake_lock_destroy(&gp2a->prx_wake_lock);
 	kfree(gp2a);
 	return 0;
 }
+
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+static void gp2a_i2c_shutdown(struct i2c_client *client)
+{
+	struct gp2a_data *gp2a = i2c_get_clientdata(client);
+
+	if (gp2a->power_state) {
+		gp2a->power_state = 0;
+		if (gp2a->power_state & LIGHT_ENABLED)
+			gp2a_light_disable(gp2a);
+		if (gp2a->pdata->power)
+			gp2a->pdata->power(false);
+	}
+
+	if (gp2a->pdata->led_on != NULL)
+		gp2a->pdata->led_on(false);
+	if (gp2a->pdata->ldo_on != NULL)
+		gp2a->pdata->ldo_on(false);
+}
+#endif
 
 static const struct i2c_device_id gp2a_device_id[] = {
 	{"gp2a", 0},
@@ -617,6 +1034,9 @@ static struct i2c_driver gp2a_i2c_driver = {
 	},
 	.probe		= gp2a_i2c_probe,
 	.remove		= gp2a_i2c_remove,
+#ifdef CONFIG_MACH_OMAP4_ESPRESSO
+	.shutdown	= gp2a_i2c_shutdown,
+#endif
 	.id_table	= gp2a_device_id,
 };
 
