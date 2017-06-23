@@ -166,9 +166,9 @@ struct ehci_hcd {			/* one per controller */
 #endif
 
 	/* debug files */
-/* #ifdef DEBUG */
+#ifdef DEBUG
 	struct dentry		*debug_dir;
-/* #endif */
+#endif
 	/*
 	 * OTG controllers and transceivers need software interaction
 	 */
@@ -760,11 +760,9 @@ static inline unsigned ehci_read_frame_index(struct ehci_hcd *ehci)
 
 /*-------------------------------------------------------------------------*/
 
-#if 0
 #ifndef DEBUG
 #define STUB_DEBUG_FILES
 #endif	/* DEBUG */
-#endif
 
 /*-------------------------------------------------------------------------*/
 
