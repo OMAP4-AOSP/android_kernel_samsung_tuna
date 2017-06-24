@@ -297,8 +297,12 @@
 /* Default FT value: 2 x max_bits_per_frame + 20% margin */
 #define HSI_COUNTERS_FT_DEFAULT		(90 << HSI_COUNTERS_FT_OFFSET)
 #define HSI_COUNTERS_TB_DEFAULT		(6 << HSI_COUNTERS_TB_OFFSET)
+#ifdef CONFIG_MACH_TUNA
+#define HSI_COUNTERS_FB_DEFAULT		(8 << HSI_COUNTERS_FB_OFFSET)
+#else
 /* Default FB value: 256 consecutives frames */
 #define HSI_COUNTERS_FB_DEFAULT		(0xFF << HSI_COUNTERS_FB_OFFSET)
+#endif
 
 #define HSI_HSR_COMBINE_COUNTERS(FB, TB, FT)				  \
 		(((FB << HSI_COUNTERS_FB_OFFSET) & HSI_COUNTERS_FB_MASK) \
