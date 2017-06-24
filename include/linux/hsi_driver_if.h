@@ -103,6 +103,10 @@ struct hsi_port_ctx {
 	u32 sys_mpu_enable[2];
 	struct hst_ctx hst;
 	struct hsr_ctx hsr;
+#ifdef CONFIG_MACH_TUNA
+	const char *cawake_padconf_name;
+	int cawake_padconf_hsi_mode; 
+#endif
 };
 
 /**
