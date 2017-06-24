@@ -42,8 +42,7 @@
 					  /* reset to complete */
 #define HSI_RESETDONE_NORMAL_RETRIES	1 /* Reset should complete in 1 R/W */
 					  /* cycle */
-
-#ifdef CONFIG_OMAP4_DPLL_CASCADING
+#if defined(CONFIG_OMAP4_DPLL_CASCADING) && !defined(CONFIG_MACH_TUNA)
 struct hsi_dpll_cascading_blocker {
 	bool lock_dpll_cascading;
 	struct device *dev;
@@ -665,7 +664,7 @@ static int __init hsi_init_gdd_chan_count(struct hsi_dev *hsi_ctrl)
 	return 0;
 }
 
-#ifdef CONFIG_OMAP4_DPLL_CASCADING
+#if defined(CONFIG_OMAP4_DPLL_CASCADING) && !defined(CONFIG_MACH_TUNA)
 static void hsi_dpll_cascading_blocker_work(struct work_struct *work)
 {
 	struct hsi_dpll_cascading_blocker *dpll_blocker;
@@ -717,13 +716,19 @@ void hsi_clocks_disable_channel(struct device *dev, u8 channel_number,
 	if (hsi_is_hst_controller_busy(hsi_ctrl))
 		dev_dbg(dev, "Disabling clocks with HST FSM not IDLE !\n");
 
+#ifdef CONFIG_MACH_TUNA
+#ifdef K3_0_PORTING_HSI_MISSING_FEATURE
+	if (dpll_cascading_blocker_release(dev) < 0)
+		dev_warn(dev, "Error releasing DPLL cascading constraint\n");
+#endif
+#else
 #ifdef CONFIG_OMAP4_DPLL_CASCADING
 	/* Allow Fclk to change */
 	dpll_blocker.lock_dpll_cascading = false;
 	dpll_blocker.dev = dev;
 	schedule_work(&dpll_blocker.dpll_blocker_work);
 #endif
-
+#endif
 	pm_runtime_put_sync_suspend(dev);
 }
 
@@ -759,13 +764,20 @@ int hsi_clocks_enable_channel(struct device *dev, u8 channel_number,
 		return -EEXIST;
 	}
 
+#ifdef CONFIG_MACH_TUNA
+#ifdef K3_0_PORTING_HSI_MISSING_FEATURE
+	/* Prevent Fclk change */
+	if (dpll_cascading_blocker_hold(dev) < 0)
+		dev_warn(dev, "Error holding DPLL cascading constraint\n");
+#endif
+#else
 #ifdef CONFIG_OMAP4_DPLL_CASCADING
 	/* Prevent Fclk to change */
 	dpll_blocker.lock_dpll_cascading = true;
 	dpll_blocker.dev = dev;
 	schedule_work(&dpll_blocker.dpll_blocker_work);
 #endif
-
+#endif
 	return pm_runtime_get_sync(dev);
 }
 
@@ -1277,7 +1289,7 @@ static int __init hsi_driver_init(void)
 		goto rback1;
 	}
 
-#ifdef CONFIG_OMAP4_DPLL_CASCADING
+#if defined(CONFIG_OMAP4_DPLL_CASCADING) && !defined(CONFIG_MACH_TUNA)
 	INIT_WORK(&dpll_blocker.dpll_blocker_work,
 			hsi_dpll_cascading_blocker_work);
 #endif
@@ -1299,7 +1311,7 @@ rback1:
 
 static void __exit hsi_driver_exit(void)
 {
-#ifdef CONFIG_OMAP4_DPLL_CASCADING
+#if defined(CONFIG_OMAP4_DPLL_CASCADING) && !defined(CONFIG_MACH_TUNA)
 	flush_work_sync(&dpll_blocker.dpll_blocker_work);
 #endif
 	platform_driver_unregister(&hsi_pdriver);
