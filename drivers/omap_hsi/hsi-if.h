@@ -53,8 +53,10 @@ void if_hsi_set_acwakeline(int ch, unsigned int state);
 void if_hsi_get_acwakeline(int ch, unsigned int *state);
 void if_hsi_get_cawakeline(int ch, unsigned int *state);
 void if_hsi_set_wake_rx_3wires_mode(int ch, unsigned int state);
+#ifndef CONFIG_MACH_TUNA
 void if_hsi_set_hi_speed(int ch, unsigned int state);
 void if_hsi_get_speed(int ch, unsigned long *fclock);
+#endif
 int if_hsi_set_rx(int ch, struct hsi_rx_config *cfg);
 void if_hsi_get_rx(int ch, struct hsi_rx_config *cfg);
 int if_hsi_set_tx(int ch, struct hsi_tx_config *cfg);

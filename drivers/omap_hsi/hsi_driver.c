@@ -783,9 +783,13 @@ static int __init hsi_controller_init(struct hsi_dev *hsi_ctrl,
 		return -ENXIO;
 	}
 	hsi_ctrl->max_p = pdata->num_ports;
+#ifdef CONFIG_MACH_TUNA
+	hsi_ctrl->clock_rate = 0;
+#else
 	hsi_ctrl->clock_enabled = false;
 	hsi_ctrl->clock_change_ongoing = false;
 	hsi_ctrl->hsi_fclk_current = 0;
+#endif
 	hsi_ctrl->in_dma_tasklet = false;
 	hsi_ctrl->fifo_mapping_strategy = pdata->fifo_mapping_strategy;
 	hsi_ctrl->dev = &pd->dev;
@@ -835,11 +839,13 @@ static int __init hsi_platform_device_probe(struct platform_device *pd)
 		return -ENXIO;
 	}
 
+#ifndef CONFIG_MACH_TUNA
 	/* Check if mandatory board functions are populated */
 	if (!pdata->device_scale) {
 		dev_err(&pd->dev, "Missing platform device_scale function\n");
 		return -ENOSYS;
 	}
+#endif
 
 	hsi_ctrl = kzalloc(sizeof(*hsi_ctrl), GFP_KERNEL);
 	if (hsi_ctrl == NULL) {
@@ -897,20 +903,39 @@ static int __init hsi_platform_device_probe(struct platform_device *pd)
 	device_init_wakeup(hsi_ctrl->dev, true);
 
 	/* Set the HSI FCLK to default. */
+#ifdef CONFIG_MACH_TUNA
+	if (!pdata->device_scale) {
+		dev_err(&pd->dev, "%s: No platform device_scale function\n",
+			__func__);
+		err = -ENXIO;
+		goto rollback3;
+	}
+#else
 	hsi_ctrl->hsi_fclk_req = pdata->default_hsi_fclk;
+#endif
 	err = pdata->device_scale(hsi_ctrl->dev, hsi_ctrl->dev,
 				  pdata->default_hsi_fclk);
 	if (err == -EBUSY) {
+#ifdef CONFIG_MACH_TUNA
+ 		dev_warn(&pd->dev, "Cannot set HSI FClk to default value: %ld. "
+			"Will retry on next open\n",
+			pdata->default_hsi_fclk);
+#else
 		/* PM framework init is late_initcall, so it may not yet be */
 		/* initialized, so be prepared to retry later on open. */
 		dev_warn(&pd->dev, "Cannot set HSI FClk to default value: %ld. "
 			 "Will retry on next open\n", pdata->default_hsi_fclk);
+#endif
 	} else if (err) {
 		dev_err(&pd->dev, "%s: Error %d setting HSI FClk to %ld.\n",
 				__func__, err, pdata->default_hsi_fclk);
 		goto rollback3;
 	} else {
+#ifdef CONFIG_MACH_TUNA
+		hsi_ctrl->clock_rate = pdata->default_hsi_fclk; 
+#else
 		hsi_ctrl->hsi_fclk_current = pdata->default_hsi_fclk;
+#endif
 	}
 	/* From here no need for HSI HW access */
 	hsi_clocks_disable(hsi_ctrl->dev, __func__);

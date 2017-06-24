@@ -335,6 +335,7 @@ void if_hsi_sw_reset(int ch)
 	spin_unlock_bh(&hsi_iface.lock);
 }
 
+#ifndef CONFIG_MACH_TUNA
 void if_hsi_set_hi_speed(int ch, unsigned int state)
 {
 	struct if_hsi_channel *channel;
@@ -351,6 +352,7 @@ void if_hsi_get_speed(int ch, unsigned long *fclock)
 	channel = &hsi_iface.channels[ch];
 	hsi_ioctl(channel->dev, HSI_IOCTL_GET_SPEED, fclock);
 }
+#endif
 
 void if_hsi_get_fifo_occupancy(int ch, size_t *occ)
 {

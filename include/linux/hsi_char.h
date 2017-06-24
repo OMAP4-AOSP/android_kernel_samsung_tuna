@@ -41,8 +41,10 @@
 #define CS_GET_FIFO_OCCUPANCY	CS_IOR(12, size_t)
 #define CS_GET_CAWAKELINE	CS_IOR(13, unsigned int)
 #define CS_SET_WAKE_RX_3WIRES_MODE	CS_IOR(14, unsigned int)
+#ifndef CONFIG_MACH_TUNA
 #define CS_SET_HI_SPEED		CS_IOR(15, unsigned int)
 #define CS_GET_SPEED		CS_IOW(16, unsigned long)
+#endif
 
 #define HSI_MODE_SLEEP		0
 #define HSI_MODE_STREAM		1

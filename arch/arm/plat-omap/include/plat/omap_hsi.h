@@ -27,7 +27,11 @@
 
 #ifndef __OMAP_HSI_H__
 #define __OMAP_HSI_H__
-
+#ifdef CONFIG_MACH_TUNA
+/* Set the HSI Functional Clock to 96MHz.
+ * This is to ensure HSI will function even at OPP50. */
+#define HSI_DEFAULT_FCLK		96000000	/* 96 MHz */
+#else
 #define HSI_FCLK_LOW_SPEED		96000000	/* 96 MHz */
 #define HSI_FCLK_HI_SPEED		192000000	/* 192 MHz */
 #define HSI_FCLK_DPLL_CASCADING		98300000        /* 98.3 MHz */
@@ -35,7 +39,7 @@
 /* Set the HSI Functional Clock to 96MHz.
  * Warning : 192MHz will force OPP100 on VDD_CORE (no OPP50 possible) */
 #define HSI_DEFAULT_FCLK		HSI_FCLK_LOW_SPEED	/* 96 MHz */
-
+#endif
 
 #define HSI_PORT_OFFSET			0x1000
 

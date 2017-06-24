@@ -361,7 +361,9 @@ static long  hsi_char_ioctl(struct file *file,
 	int ch = (int)file->private_data;
 	unsigned int state;
 	size_t size;
+#ifndef CONFIG_MACH_TUNA
 	unsigned long fclock;
+#endif
 	struct hsi_rx_config rx_cfg;
 	struct hsi_tx_config tx_cfg;
 	int ret = 0;
@@ -434,6 +436,7 @@ static long  hsi_char_ioctl(struct file *file,
 		if (copy_to_user((void __user *)arg, &size, sizeof(size)))
 			ret = -EFAULT;
 		break;
+#ifndef CONFIG_MACH_TUNA
 	case CS_SET_HI_SPEED:
 		if (copy_from_user(&state, (void __user *)arg, sizeof(state)))
 			ret = -EFAULT;
@@ -445,6 +448,7 @@ static long  hsi_char_ioctl(struct file *file,
 		if (copy_to_user((void __user *)arg, &fclock, sizeof(fclock)))
 			ret = -EFAULT;
 		break;
+#endif
 	default:
 		ret = -ENOIOCTLCMD;
 		break;

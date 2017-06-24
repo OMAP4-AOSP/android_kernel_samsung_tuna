@@ -197,9 +197,13 @@ struct hsi_dev { /* HSI_TODO:  should be later renamed into hsi_controller*/
 	unsigned long phy_base;
 	spinlock_t lock; /* Serializes access to internal data and regs */
 	bool clock_enabled;
+#ifdef CONFIG_MACH_TUNA
+	unsigned long clock_rate; 
+#else
 	bool clock_change_ongoing;
 	unsigned long hsi_fclk_req;
 	unsigned long hsi_fclk_current;
+#endif
 	int gdd_irq;
 	unsigned int fifo_mapping_strategy;
 	unsigned int gdd_usecount;
