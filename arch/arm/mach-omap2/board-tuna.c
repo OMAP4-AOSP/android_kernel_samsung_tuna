@@ -41,7 +41,6 @@
 #include <linux/platform_data/lte_modem_bootloader.h>
 #include <plat/mcspi.h>
 #include <linux/i2c-gpio.h>
-#include <linux/earlysuspend.h>
 
 #include <mach/hardware.h>
 #include <mach/omap4-common.h>
