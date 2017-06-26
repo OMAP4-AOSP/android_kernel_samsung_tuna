@@ -852,7 +852,7 @@ out:
 }
 EXPORT_SYMBOL(twl6030_gpadc_conversion);
 
-#ifdef CONFIG_MACH_TUNA
+#if defined(CONFIG_MACH_TUNA) || defined(CONFIG_MACH_OMAP4_ESPRESSO)
 int twl6030_get_gpadc_conversion(int channel_no)
 {
 	struct twl6030_gpadc_request req;
@@ -867,8 +867,13 @@ int twl6030_get_gpadc_conversion(int channel_no)
 	if (ret < 0)
 		return ret;
 
+#ifdef CONFIG_MACH_TUNA
 	if (req.rbuf[channel_no] > 0)
 		temp = req.buf[channel_no].raw_code;
+#else
+	if (req.rbuf[channel_no] > 0)
+		temp = req.rbuf[channel_no];
+#endif
 
 	return temp;
 }
