@@ -67,11 +67,12 @@ void hsi_hsr_suspend(struct hsi_dev *hsi_ctrl)
 			     HSI_HSR_MODE_REG(port));
 	}
 
-
+#ifdef CONFIG_MACH_TUNA
 	/* Save context */
 	hsi_save_ctx(hsi_ctrl);
 
 	hsi_ctrl->clock_enabled = false;
+#endif
 }
 
 void hsi_hsr_resume(struct hsi_dev *hsi_ctrl)
@@ -1122,8 +1123,10 @@ static int hsi_pm_resume(struct device *dev)
 *
 *
 */
+#ifdef CONFIG_MACH_TUNA
 #define HSI_HSR_MODE_FRAME	0x2
 #define HSI_PORT1	0x1
+#endif
 int hsi_runtime_resume(struct device *dev)
 {
 	struct platform_device *pd = to_platform_device(dev);
@@ -1143,16 +1146,16 @@ int hsi_runtime_resume(struct device *dev)
 	/* Restore context */
 	hsi_restore_ctx(hsi_ctrl);
 
+#ifdef CONFIG_MACH_TUNA
+	/* Allow data reception */
+	hsi_hsr_resume(hsi_ctrl);
+
 	/* Restore HSR_MODE register value */
 	/* WARNING: works only in this configuration: */
 	/* - Flow = Synchronized */
 	/* - Mode = frame */
 	hsi_outl(HSI_HSR_MODE_FRAME, hsi_ctrl->base,
 			HSI_HSR_MODE_REG(HSI_PORT1));
-
-#ifdef CONFIG_MACH_TUNA
-	/* Allow data reception */
-	hsi_hsr_resume(hsi_ctrl);
 
 	/* When HSI is ON, no need for IO wakeup mechanism on any HSI port */
 	for (i = 0; i < hsi_ctrl->max_p; i++)
@@ -1199,6 +1202,11 @@ int hsi_runtime_suspend(struct device *dev)
 		for (i = 0; i < hsi_ctrl->max_p; i++)
 			pdata->wakeup_disable(
 				hsi_ctrl->hsi_port[i].port_number);
+#else
+	/* Save context */
+	hsi_save_ctx(hsi_ctrl);
+
+	hsi_ctrl->clock_enabled = false;
 #endif
 
 	/* HSI is now ready to be put in low power state */
