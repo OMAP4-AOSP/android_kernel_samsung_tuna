@@ -987,10 +987,12 @@ int hsi_ioctl(struct hsi_device *dev, unsigned int command, void *arg)
 							(hsi_ctrl->dev)))
 				hsi_set_pm_default(hsi_ctrl);
 
+#ifdef CONFIG_MACH_TUNA
 		/* Clean CA_WAKE status */
 		pport->cawake_status = -1;
 		hsi_outl(HSI_CAWAKEDETECTED, base,
 			 HSI_SYS_MPU_STATUS_REG(port, pport->n_irq));
+#endif
 		hsi_driver_enable_interrupt(pport, HSI_CAWAKEDETECTED);
 		hsi_outl_and(HSI_SET_WAKE_3_WIRES_MASK,	base,
 			     HSI_SYS_SET_WAKE_REG(port));
