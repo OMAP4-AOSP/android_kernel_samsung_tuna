@@ -87,9 +87,11 @@ int hsi_set_rx(struct hsi_port *sport, struct hsr_ctx *cfg)
 	void __iomem *base = hsi_ctrl->base;
 	int port = sport->port_number;
 	struct platform_device *pdev = to_platform_device(hsi_ctrl->dev);
+#ifndef CONFIG_MACH_TUNA
 	struct hsi_platform_data *pdata = dev_get_platdata(&pdev->dev);
 	int port_index = pdata->ctx->pctx[0].port_number == port ? 0 : 1;
 	struct hsi_port_ctx *p_ctx = &pdata->ctx->pctx[port_index];
+#endif
 
 	if (((cfg->mode & HSI_MODE_VAL_MASK) != HSI_MODE_STREAM) &&
 	    ((cfg->mode & HSI_MODE_VAL_MASK) != HSI_MODE_FRAME) &&
@@ -127,11 +129,18 @@ int hsi_set_rx(struct hsi_port *sport, struct hsr_ctx *cfg)
 			return -EINVAL;
 	}
 
+#ifdef CONFIG_MACH_TUNA
+	if ((cfg->mode != NOT_SET) && (cfg->flow != NOT_SET))
+		hsi_outl(cfg->mode | ((cfg->flow & HSI_FLOW_VAL_MASK)
+				      << HSI_FLOW_OFFSET), base,
+			 HSI_HSR_MODE_REG(port));
+#else
 	if ((cfg->mode != NOT_SET) && (cfg->flow != NOT_SET)) {
 		p_ctx->hsr.mode = cfg->mode | ((cfg->flow & HSI_FLOW_VAL_MASK)
 						<< HSI_FLOW_OFFSET);
 		hsi_outl(p_ctx->hsr.mode, base, HSI_HSR_MODE_REG(port));
 	}
+#endif
 
 	if (cfg->frame_size != NOT_SET)
 		hsi_outl(cfg->frame_size, base, HSI_HSR_FRAMESIZE_REG(port));
