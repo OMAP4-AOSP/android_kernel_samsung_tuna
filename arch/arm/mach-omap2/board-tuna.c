@@ -1386,12 +1386,27 @@ static void __init tuna_map_io(void)
 	omap44xx_map_common_io();
 }
 
+static void omap4_tuna_init_carveout_sizes(
+		struct omap_ion_platform_data *ion)
+{
+	/* WFD is not supported in tuna So the size is zero */
+	ion->secure_output_wfdhdcp_size = 0;
+	ion->ducati_heap_size = (SZ_1M * 105);
+#ifndef CONFIG_ION_OMAP_TILER_DYNAMIC_ALLOC
+	ion->tiler1d_size = (SZ_1M * 90);
+	ion->nonsecure_tiler2d_size = 0;
+	ion->tiler2d_size = (SZ_1M * 128);
+#endif
+}
+
+
 static void __init tuna_reserve(void)
 {
 	omap_init_ram_size();
 
 #ifdef CONFIG_ION_OMAP
 	tuna_android_display_setup(get_omap_ion_platform_data());
+	omap4_tuna_init_carveout_sizes(get_omap_ion_platform_data());
 	omap_ion_init();
 #else
 	tuna_android_display_setup(NULL);
