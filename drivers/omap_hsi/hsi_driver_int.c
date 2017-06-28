@@ -613,6 +613,7 @@ int hsi_do_cawake_process(struct hsi_port *pport)
 		spin_lock(&hsi_ctrl->lock);
 	}
 
+#ifdef CONFIG_MACH_TUNA
 	/* If another CAWAKE event occured while previous is still processed */
 	/* do not clear the status bit */
 	cawake_status = hsi_get_cawake(pport);
@@ -622,6 +623,7 @@ int hsi_do_cawake_process(struct hsi_port *pport)
 					cawake_status);
 		return -EAGAIN;
 	}
+#endif
 
 	return 0;
 }
