@@ -51,6 +51,7 @@
  * @endpoints_lock: lock of the endpoints set
  * @sendq:	wait queue of sending contexts waiting for free rpmsg buffer
  * @ns_ept:	the bus's name service endpoint
+ * @rproc:	a reference to the remote processor object
  *
  * This structure stores the rpmsg state of a given virtio remote processor
  * device (there might be several virtio rproc devices for each physical
@@ -69,6 +70,9 @@ struct virtproc_info {
 	spinlock_t endpoints_lock;
 	wait_queue_head_t sendq;
 	struct rpmsg_endpoint *ns_ept;
+#ifndef CONFIG_MACH_TUNA
+	struct rproc *rproc;
+#endif
 };
 
 #define to_rpmsg_channel(d) container_of(d, struct rpmsg_channel, dev)
@@ -536,6 +540,16 @@ out:
 }
 EXPORT_SYMBOL(rpmsg_send_offchannel_raw);
 
+#ifndef CONFIG_MACH_TUNA
+struct rproc *rpmsg_get_rproc_handle(struct rpmsg_channel *rpdev)
+{
+	if (!rpdev || !rpdev->vrp)
+		return NULL;
+	return rpdev->vrp->rproc;
+}
+EXPORT_SYMBOL(rpmsg_get_rproc_handle);
+#endif
+
 static void rpmsg_recv_done(struct virtqueue *rvq)
 {
 	struct rpmsg_hdr *msg;
@@ -702,6 +716,12 @@ static int rpmsg_probe(struct virtio_device *vdev)
 	/* simulated addr base to make virt_to_page happy */
 	vdev->config->get(vdev, VPROC_SIM_BASE, &vrp->sim_base,
 							sizeof(vrp->sim_base));
+
+#ifndef CONFIG_MACH_TUNA
+	/* also store reference to remote proc */
+	vdev->config->get(vdev, VPROC_RPROC_REF,
+			&vrp->rproc, sizeof(vrp->rproc));
+#endif
 
 	/* set up the receive buffers */
 	for (i = 0; i < num_bufs / 2; i++) {

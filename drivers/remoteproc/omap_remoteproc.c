@@ -35,12 +35,18 @@
 #include "../../arch/arm/mach-omap2/clockdomain.h"
 
 #define PM_SUSPEND_MBOX		0xffffff07
+#ifndef CONFIG_MACH_TUNA
+#define PM_SUSPEND_MBOX_FORCE	0xffffff09
+#endif
 #define PM_SUSPEND_TIMEOUT	300
 
 struct omap_rproc_priv {
 	struct iommu *iommu;
 	int (*iommu_cb)(struct rproc *, u64, u32);
 	int (*wdt_cb)(struct rproc *);
+#ifndef CONFIG_MACH_TUNA
+	u64 bootaddr;
+#endif
 #ifdef CONFIG_REMOTE_PROC_AUTOSUSPEND
 	struct omap_mbox *mbox;
 	void __iomem *idle;
@@ -56,11 +62,20 @@ static bool _may_suspend(struct omap_rproc_priv *rpp)
 	return readl(rpp->idle) & rpp->idle_mask;
 }
 
+#ifdef CONFIG_MACH_TUNA
 static int _suspend(struct omap_rproc_priv *rpp)
+#else
+static int _suspend(struct omap_rproc_priv *rpp, bool force)
+#endif
 {
 	unsigned long timeout = msecs_to_jiffies(PM_SUSPEND_TIMEOUT) + jiffies;
 
-	omap_mbox_msg_send(rpp->mbox, PM_SUSPEND_MBOX);
+#ifndef CONFIG_MACH_TUNA
+	if (force)
+		omap_mbox_msg_send(rpp->mbox, PM_SUSPEND_MBOX_FORCE);
+	else
+#endif
+		omap_mbox_msg_send(rpp->mbox, PM_SUSPEND_MBOX);
 
 	while (time_after(timeout, jiffies)) {
 		if ((readl(rpp->suspend) & rpp->suspend_mask) &&
@@ -68,8 +83,11 @@ static int _suspend(struct omap_rproc_priv *rpp)
 			return 0;
 		schedule();
 	}
-
+#ifdef CONFIG_MACH_TUNA
 	return -EIO;
+#else
+	return -EAGAIN;
+#endif
 }
 
 static int omap_suspend(struct rproc *rproc, bool force)
@@ -77,7 +95,11 @@ static int omap_suspend(struct rproc *rproc, bool force)
 	struct omap_rproc_priv *rpp = rproc->priv;
 
 	if (rpp->idle && (force || _may_suspend(rpp)))
+#ifdef CONFIG_MACH_TUNA
 		return _suspend(rpp);
+#else
+		return _suspend(rpp, force);
+#endif
 
 	return -EBUSY;
 }
@@ -85,6 +107,7 @@ static int omap_suspend(struct rproc *rproc, bool force)
 
 static void omap_rproc_dump_registers(struct rproc *rproc)
 {
+#ifdef CONFIG_MACH_TUNA
 	unsigned long flags;
 	char buf[64];
 	struct pt_regs regs;
@@ -122,6 +145,12 @@ static void omap_rproc_dump_registers(struct rproc *rproc)
 	pr_info("Flags: %s  IRQs o%s  FIQs o%s\n",
 		buf, interrupts_enabled(&regs) ? "n" : "ff",
 		fast_interrupts_enabled(&regs) ? "n" : "ff");
+#else
+	struct device *dev = rproc->dev;
+	struct omap_rproc_pdata *pdata = dev->platform_data;
+
+	pdata->ops->dump_registers(rproc);
+#endif
 }
 
 static int
@@ -183,6 +212,17 @@ static int omap_rproc_iommu_isr(struct iommu *iommu, u32 da, u32 errs, void *p)
 	return ret;
 }
 
+#ifndef CONFIG_MACH_TUNA
+static inline void _load_boot_addr(struct rproc *rproc, u64 bootaddr)
+{
+	struct omap_rproc_pdata *pdata = rproc->dev->platform_data;
+
+	if (pdata->boot_reg)
+		omap_writel(bootaddr, pdata->boot_reg);
+	return;
+}
+#endif
+
 int omap_rproc_activate(struct omap_device *od)
 {
 	int i, ret = 0;
@@ -206,6 +246,13 @@ int omap_rproc_activate(struct omap_device *od)
 
 	if (!rpp->mbox)
 		rpp->mbox = omap_mbox_get(pdata->sus_mbox_name, NULL);
+#endif
+#ifndef CONFIG_MACH_TUNA
+	/**
+	 * explicitly configure a boot address from which remoteproc
+	 * starts executing code when taken out of reset.
+	 */
+	_load_boot_addr(rproc, rpp->bootaddr);
 #endif
 
 	/**
@@ -437,12 +484,31 @@ static irqreturn_t omap_rproc_watchdog_isr(int irq, void *p)
 	return IRQ_HANDLED;
 }
 #endif
+
+#ifndef CONFIG_MACH_TUNA
+static int omap_rproc_pm_init(struct rproc *rproc, u64 susp_addr)
+{
+	struct omap_rproc_pdata *pdata = rproc->dev->platform_data;
+	phys_addr_t pa;
+	int ret;
+
+	ret = rproc_da_to_pa(rproc, susp_addr, &pa);
+	if (!ret)
+		pdata->suspend_addr = (u32)pa;
+
+	return ret;
+}
+#endif
+
 static inline int omap_rproc_start(struct rproc *rproc, u64 bootaddr)
 {
 	struct device *dev = rproc->dev;
 	struct platform_device *pdev = to_platform_device(dev);
 	struct omap_rproc_pdata *pdata = dev->platform_data;
 	struct omap_rproc_timers_info *timers = pdata->timers;
+#ifndef CONFIG_MACH_TUNA
+	struct omap_rproc_priv *rpp = rproc->priv;
+#endif
 	int i;
 	int ret = 0;
 
@@ -467,8 +533,15 @@ static inline int omap_rproc_start(struct rproc *rproc, u64 bootaddr)
 		}
 		omap_dm_timer_set_source(timers[i].odt, OMAP_TIMER_SRC_SYS_CLK);
 #ifdef CONFIG_REMOTEPROC_WATCHDOG
+#ifdef CONFIG_MACH_TUNA
 		/* GPT 9 and 11 are using as WDT */
 		if (timers[i].id == 9 || timers[i].id == 11) {
+#else
+		/* GPT 9 & 11 (ipu); GPT 6 (dsp) are used as watchdog timers */
+		if ((!strcmp(rproc->name, "dsp") && timers[i].id == 6) ||
+		    (!strcmp(rproc->name, "ipu") &&
+				(timers[i].id == 9 || timers[i].id == 11))) {
+#endif
 			ret = request_irq(omap_dm_timer_get_irq(timers[i].odt),
 					 omap_rproc_watchdog_isr, IRQF_DISABLED,
 					"rproc-wdt", rproc);
@@ -478,6 +551,9 @@ static inline int omap_rproc_start(struct rproc *rproc, u64 bootaddr)
 #endif
 	}
 
+#ifndef CONFIG_MACH_TUNA
+	rpp->bootaddr = bootaddr;
+#endif
 	ret = omap_device_enable(pdev);
 out:
 	if (ret) {
@@ -532,8 +608,15 @@ static inline int omap_rproc_stop(struct rproc *rproc)
 
 	for (i = 0; i < pdata->timers_cnt; i++) {
 #ifdef CONFIG_REMOTEPROC_WATCHDOG
+#ifdef CONFIG_MACH_TUNA
 		/* GPT 9 and 11 are used as WDT */
 		if (timers[i].id == 9 || timers[i].id == 11)
+#else
+		/* GPT 9 & 11 (ipu); GPT 6 (dsp) are used as watchdog timers */
+		if ((!strcmp(rproc->name, "dsp") && timers[i].id == 6) ||
+		    (!strcmp(rproc->name, "ipu") &&
+				(timers[i].id == 9 || timers[i].id == 11)))
+#endif
 			free_irq(omap_dm_timer_get_irq(timers[i].odt), rproc);
 #endif
 		omap_dm_timer_free(timers[i].odt);
@@ -545,8 +628,20 @@ err:
 
 static int omap_rproc_set_lat(struct rproc *rproc, long val)
 {
+#ifdef CONFIG_MACH_TUNA
 	pm_qos_update_request(rproc->qos_request, val);
 	return 0;
+#else
+	int ret = 0;
+
+	if (!strcmp(rproc->name, "ipu"))
+		pm_qos_update_request(rproc->qos_request, val);
+	else
+		ret = omap_pm_set_max_dev_wakeup_lat(rproc->dev,
+						rproc->dev, val);
+
+	return ret;
+#endif
 }
 
 static int omap_rproc_set_l3_bw(struct rproc *rproc, long val)
@@ -575,6 +670,9 @@ static struct rproc_ops omap_rproc_ops = {
 	.watchdog_exit = omap_rproc_watchdog_exit,
 #endif
 	.dump_registers = omap_rproc_dump_registers,
+#ifndef CONFIG_MACH_TUNA
+	.pm_init = omap_rproc_pm_init,
+#endif
 };
 
 static int omap_rproc_probe(struct platform_device *pdev)

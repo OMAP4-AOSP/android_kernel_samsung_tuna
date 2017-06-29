@@ -48,15 +48,21 @@ static DEFINE_SPINLOCK(rprocs_lock);
 /* debugfs parent dir */
 static struct dentry *rproc_dbg;
 
+#ifdef CONFIG_MACH_TUNA
 static ssize_t rproc_format_trace_buf(struct rproc *rproc, char __user *userbuf,
 					size_t count, loff_t *ppos,
 					const void *src, int size)
+#else
+static ssize_t rproc_format_trace_buf(char __user *userbuf, size_t count,
+				    loff_t *ppos, const void *src, int size)
+#endif
 {
 	const char *buf = (const char *) src;
 	ssize_t num_copied = 0;
 	static int from_beg;
 	loff_t pos = *ppos;
 	int *w_idx;
+#ifdef CONFIG_MACH_TUNA
 	int i, w_pos, ret = 0;
 
 	if (mutex_lock_interruptible(&rproc->tlock))
@@ -72,6 +78,16 @@ static ssize_t rproc_format_trace_buf(struct rproc *rproc, char __user *userbuf,
 		ret = -EINVAL;
 		goto unlock;
 	}
+#else
+	int i, w_pos;
+
+	/* When src is NULL, the remoteproc is offline. */
+	if (!src)
+		return -EIO;
+
+	if (size < 2 * sizeof(u32))
+		return -EINVAL;
+#endif
 
 	/* Assume write_idx is the penultimate byte in the buffer trace*/
 	size = size - (sizeof(u32) * 2);
@@ -93,10 +109,16 @@ static ssize_t rproc_format_trace_buf(struct rproc *rproc, char __user *userbuf,
 		if (!num_copied) {
 			from_beg = 1;
 			*ppos = 0;
+#ifdef CONFIG_MACH_TUNA
 		} else {
 			ret = num_copied;
 			goto unlock;
 		}
+#else
+		} else
+			return num_copied;
+#endif
+
 print_beg:
 	for (i = 0; i < w_pos && buf[i]; i++)
 		;
@@ -106,11 +128,17 @@ print_beg:
 			simple_read_from_buffer(userbuf, count, ppos, src, i);
 		if (!num_copied)
 			from_beg = 0;
+#ifdef CONFIG_MACH_TUNA
 		ret = num_copied;
 	}
 unlock:
 	mutex_unlock(&rproc->tlock);
 	return ret;
+#else
+		return num_copied;
+	}
+	return 0;
+#endif
 }
 
 static ssize_t rproc_name_read(struct file *filp, char __user *userbuf,
@@ -147,6 +175,8 @@ static int rproc_open_generic(struct inode *inode, struct file *file)
 	return 0;
 }
 
+#ifdef CONFIG_MACH_TUNA
+
 #define DEBUGFS_READONLY_FILE(name, v, l)				\
 static ssize_t name## _rproc_read(struct file *filp,			\
 		char __user *ubuf, size_t count, loff_t *ppos)		\
@@ -160,6 +190,24 @@ static const struct file_operations name ##_rproc_ops = {		\
 	.open = rproc_open_generic,					\
 	.llseek	= generic_file_llseek,					\
 };
+
+#else
+
+#define DEBUGFS_READONLY_FILE(name, value, len)				\
+static ssize_t name## _rproc_read(struct file *filp,			\
+		char __user *userbuf, size_t count, loff_t *ppos)	\
+{									\
+	struct rproc *rproc = filp->private_data;			\
+	return rproc_format_trace_buf(userbuf, count, ppos, value, len);\
+}									\
+									\
+static const struct file_operations name ##_rproc_ops = {		\
+	.read = name ##_rproc_read,					\
+	.open = rproc_open_generic,					\
+	.llseek	= generic_file_llseek,					\
+};
+
+#endif
 
 #ifdef CONFIG_REMOTEPROC_CORE_DUMP
 
@@ -272,9 +320,14 @@ static int setup_rproc_elf_core_dump(struct core_rproc *d)
 {
 	short __phnum;
 	struct elf_phdr *nphdr;
+#ifdef CONFIG_MACH_TUNA
 	struct exc_regs *xregs = d->rproc->cdump_buf1;
 	struct pt_regs *regs =
 		(struct pt_regs *)&d->core.core_note.prstatus.pr_reg;
+#else
+	struct exc_regs *xregs;
+	struct pt_regs *regs;
+#endif
 
 	memset(&d->core.elf, 0, sizeof(d->core.elf));
 
@@ -309,7 +362,16 @@ static int setup_rproc_elf_core_dump(struct core_rproc *d)
 	d->core.core_note.note_prstatus.n_type = NT_PRSTATUS;
 	memcpy(d->core.core_note.name, CORE_STR, sizeof(CORE_STR));
 
+#ifndef CONFIG_MACH_TUNA
+	/* fill in registers for ipu only, dsp yet to be supported */
+	if (!strcmp(d->rproc->name, "ipu")) {
+		xregs = d->rproc->cdump_buf1;
+		regs = (struct pt_regs *)&d->core.core_note.prstatus.pr_reg;
+		remoteproc_fill_pt_regs(regs, xregs);
+	}
+#else
 	remoteproc_fill_pt_regs(regs, xregs);
+#endif
 
 	/* We ignore the NVIC registers for now */
 
@@ -558,6 +620,7 @@ static struct rproc *__find_rproc_by_name(const char *name)
 /**
  * __rproc_da_to_pa - convert a device (virtual) address to its physical address
  * @maps: the remote processor's memory mappings array
+ * @rproc: the remote processor handle
  * @da: a device address (as seen by the remote processor)
  * @pa: pointer to the physical address result
  *
@@ -568,6 +631,7 @@ static struct rproc *__find_rproc_by_name(const char *name)
  * On success 0 is returned, and the @pa is updated with the result.
  * Otherwise, -EINVAL is returned.
  */
+#ifdef CONFIG_MACH_TUNA
 static int
 rproc_da_to_pa(const struct rproc_mem_entry *maps, u64 da, phys_addr_t *pa)
 {
@@ -588,6 +652,34 @@ rproc_da_to_pa(const struct rproc_mem_entry *maps, u64 da, phys_addr_t *pa)
 
 	return -EINVAL;
 }
+#else
+int rproc_da_to_pa(struct rproc *rproc, u64 da, phys_addr_t *pa)
+{
+	int i, ret = -EINVAL;
+	struct rproc_mem_entry *maps = NULL;
+
+	if (!rproc || !pa)
+		return -EINVAL;
+
+	if (mutex_lock_interruptible(&rproc->lock))
+		return -EINTR;
+
+	maps = rproc->memory_maps;
+	for (i = 0; maps->size; maps++) {
+		if (da >= maps->da && da < (maps->da + maps->size)) {
+			pr_debug("%s: matched mem entry no. %d\n",
+				__func__, i);
+			*pa = maps->pa + (da - maps->da);
+			ret = 0;
+			break;
+		}
+	}
+
+	mutex_unlock(&rproc->lock);
+	return ret;
+}
+EXPORT_SYMBOL(rproc_da_to_pa);
+#endif
 
 static int rproc_mmu_fault_isr(struct rproc *rproc, u64 da, u32 flags)
 {
@@ -769,7 +861,13 @@ static int rproc_add_mem_entry(struct rproc *rproc, struct fw_resource *rsc)
 		 * carveouts we don't care about in a core dump.
 		 * Perhaps the ION carveout should be reported as RSC_DEVMEM.
 		 */
-		me->core = (rsc->type == RSC_CARVEOUT && rsc->pa != 0xba300000);
+		me->core = (rsc->type == RSC_CARVEOUT &&
+#ifdef CONFIG_MACH_TUNA
+				rsc->pa != 0xba300000);
+#else
+				strcmp(rsc->name, "IPU_MEM_IOBUFS") &&
+				strcmp(rsc->name, "DSP_MEM_IOBUFS"));
+#endif
 #endif
 	}
 
@@ -823,6 +921,9 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 	u64 trace_da1 = 0;
 	u64 cdump_da0 = 0;
 	u64 cdump_da1 = 0;
+#ifndef CONFIG_MACH_TUNA
+	u64 susp_addr = 0;
+#endif
 	int ret = 0;
 
 	while (len >= sizeof(*rsc) && !ret) {
@@ -873,6 +974,11 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 		case RSC_BOOTADDR:
 			*bootaddr = da;
 			break;
+#ifndef CONFIG_MACH_TUNA
+		case RSC_SUSPENDADDR:
+			susp_addr = da;
+			break;
+#endif
 		case RSC_DEVMEM:
 			ret = rproc_add_mem_entry(rproc, rsc);
 			if (ret) {
@@ -896,7 +1002,17 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 				rsc->pa = pa;
 			} else {
 				ret = rproc_check_poolmem(rproc, rsc->len, pa);
+#ifdef CONFG_MACH_TUNA
 				if (ret) {
+#else
+				/*
+				 * ignore the error for DSP buffers as they can
+				 * not be assigned together with rest of dsp
+				 * pool memory
+				 */
+				if (ret &&
+					strcmp(rsc->name, "DSP_MEM_IOBUFS")) {
+#endif
 					dev_err(dev, "static memory for %s "
 						"doesn't belong to poolmem\n",
 						rsc->name);
@@ -932,13 +1048,21 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 	 * __iomem to make sparse happy
 	 */
 
+#ifdef CONFIG_MACH_TUNA
 	if (mutex_lock_interruptible(&rproc->tlock))
 		goto error;
+#endif
 
 	if (trace_da0) {
+#ifdef CONFIG_MACH_TUNA
 		ret = rproc_da_to_pa(rproc->memory_maps, trace_da0, &pa);
 		if (ret)
 			goto unlock;
+#else
+		ret = rproc_da_to_pa(rproc, trace_da0, &pa);
+		if (ret)
+			goto error;
+#endif
 		rproc->trace_buf0 = (__force void *)
 				ioremap_nocache(pa, rproc->trace_len0);
 		if (rproc->trace_buf0) {
@@ -949,20 +1073,35 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 							GFP_KERNEL);
 				if (!rproc->last_trace_buf0) {
 					ret = -ENOMEM;
+#ifdef CONFIG_MACH_TUNA
 					goto unlock;
+#else
+					goto error;
+#endif
 				}
 				DEBUGFS_ADD(trace0_last);
 			}
 		} else {
 			dev_err(dev, "can't ioremap trace buffer0\n");
 			ret = -EIO;
+#ifdef CONFIG_MACH_TUNA
 			goto unlock;
+
+#else
+			goto error;
+#endif
 		}
 	}
 	if (trace_da1) {
+#ifdef CONFIG_MACH_TUNA
 		ret = rproc_da_to_pa(rproc->memory_maps, trace_da1, &pa);
 		if (ret)
 			goto unlock;
+#else
+		ret = rproc_da_to_pa(rproc, trace_da1, &pa);
+		if (ret)
+			goto error;
+#endif
 		rproc->trace_buf1 = (__force void *)
 				ioremap_nocache(pa, rproc->trace_len1);
 		if (rproc->trace_buf1) {
@@ -973,14 +1112,20 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 							GFP_KERNEL);
 				if (!rproc->last_trace_buf1) {
 					ret = -ENOMEM;
+#ifdef CONFIG_MACH_TUNA
 					goto unlock;
+#else
+					goto error;
+#endif
 				}
 				DEBUGFS_ADD(trace1_last);
 			}
 		} else {
 			dev_err(dev, "can't ioremap trace buffer1\n");
 			ret = -EIO;
+#ifdef CONFIG_MACH_TUNA
 			goto unlock;
+#endif
 		}
 	}
 
@@ -992,9 +1137,15 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 	 * make sparse happy
 	 */
 	if (cdump_da0) {
+#ifdef CONFIG_MACH_TUNA
 		ret = rproc_da_to_pa(rproc->memory_maps, cdump_da0, &pa);
 		if (ret)
 			goto unlock;
+#else
+		ret = rproc_da_to_pa(rproc, cdump_da0, &pa);
+		if (ret)
+			goto error;
+#endif
 		rproc->cdump_buf0 = (__force void *)
 					ioremap_nocache(pa, rproc->cdump_len0);
 		if (rproc->cdump_buf0)
@@ -1002,13 +1153,23 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 		else {
 			dev_err(dev, "can't ioremap cdump buffer0\n");
 			ret = -EIO;
+#ifdef CONFIG_MACH_TUNA
 			goto unlock;
+#else
+			goto error;
+#endif
 		}
 	}
 	if (cdump_da1) {
+#ifdef CONFIG_MACH_TUNA
 		ret = rproc_da_to_pa(rproc->memory_maps, cdump_da1, &pa);
 		if (ret)
 			goto unlock;
+#else
+		ret = rproc_da_to_pa(rproc, cdump_da1, &pa);
+		if (ret)
+			goto error;
+#endif
 		rproc->cdump_buf1 = (__force void *)
 					ioremap_nocache(pa, rproc->cdump_len1);
 		if (rproc->cdump_buf1)
@@ -1016,11 +1177,20 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 		else {
 			dev_err(dev, "can't ioremap cdump buffer1\n");
 			ret = -EIO;
+#ifndef CONFIG_MACH_TUNA
+			goto error;
+#endif
 		}
 	}
 
+#ifdef CONFIG_MACH_TUNA
 unlock:
 	mutex_unlock(&rproc->tlock);
+#else
+	/* post-process pm data types */
+	if (susp_addr)
+		ret = rproc->ops->pm_init(rproc, susp_addr);
+#endif
 
 error:
 	if (ret && rproc->dbg_dir) {
@@ -1076,7 +1246,11 @@ static int rproc_process_fw(struct rproc *rproc, struct fw_section *section,
 		}
 
 		if (section->type <= FW_DATA) {
+#ifdef CONFIG_MACH_TUNA
 			ret = rproc_da_to_pa(rproc->memory_maps, da, &pa);
+#else
+			ret = rproc_da_to_pa(rproc, da, &pa);
+#endif
 			if (ret) {
 				dev_err(dev, "rproc_da_to_pa failed:%d\n", ret);
 				break;
@@ -1121,7 +1295,11 @@ static void rproc_loader_cont(const struct firmware *fw, void *context)
 	u64 bootaddr = 0;
 	struct fw_header *image;
 	struct fw_section *section;
+#ifdef CONFIG_MACH_TUNA
 	int left, ret;
+#else
+	int left, ret = -EINVAL;
+#endif
 
 	if (!fw) {
 		dev_err(dev, "%s: failed to load %s\n", __func__, fwfile);
@@ -1168,6 +1346,12 @@ static void rproc_loader_cont(const struct firmware *fw, void *context)
 
 	left = fw->size - sizeof(struct fw_header) - image->header_len;
 
+#ifndef CONFIG_MACH_TUNA
+	/* event currently used to bump the remoteproc to max freq
+	 * while booting.  */
+	_event_notify(rproc, RPROC_PRELOAD, NULL);
+#endif
+
 	ret = rproc_process_fw(rproc, section, left, &bootaddr);
 	if (ret) {
 		dev_err(dev, "Failed to process the image: %d\n", ret);
@@ -1181,6 +1365,10 @@ out:
 complete_fw:
 	/* allow all contexts calling rproc_put() to proceed */
 	complete_all(&rproc->firmware_loading_complete);
+#ifndef CONFIG_MACH_TUNA
+	if (ret)
+		_event_notify(rproc, RPROC_LOAD_ERROR, NULL);
+#endif
 }
 
 static int rproc_loader(struct rproc *rproc)
@@ -1207,6 +1395,36 @@ static int rproc_loader(struct rproc *rproc)
 
 	return 0;
 }
+
+#ifndef CONFIG_MACH_TUNA
+int rproc_pa_to_da(struct rproc *rproc, phys_addr_t pa, u64 *da)
+{
+	int i, ret = -EINVAL;
+	struct rproc_mem_entry *maps = NULL;
+
+	if (!rproc || !da)
+		return -EINVAL;
+
+	if (mutex_lock_interruptible(&rproc->lock))
+		return -EINTR;
+
+	if (rproc->state == RPROC_RUNNING || rproc->state == RPROC_SUSPENDED) {
+		maps = rproc->memory_maps;
+		for (i = 0; maps->size; maps++) {
+			if (pa >= maps->pa && pa < (maps->pa + maps->size)) {
+				*da = maps->da + (pa - maps->pa);
+				ret = 0;
+				break;
+			}
+		}
+	}
+
+	mutex_unlock(&rproc->lock);
+	return ret;
+
+}
+EXPORT_SYMBOL(rproc_pa_to_da);
+#endif
 
 int rproc_set_secure(const char *name, bool enable)
 {
@@ -1345,8 +1563,10 @@ void rproc_put(struct rproc *rproc)
 	if (--rproc->count)
 		goto out;
 
+#ifdef CONFIG_MACH_TUNA
 	if (mutex_lock_interruptible(&rproc->tlock))
 		goto out;
+#endif
 
 	if (rproc->trace_buf0)
 		/* iounmap normal memory, so make sparse happy */
@@ -1364,7 +1584,9 @@ void rproc_put(struct rproc *rproc)
 		iounmap((__force void __iomem *) rproc->cdump_buf1);
 	rproc->cdump_buf0 = rproc->cdump_buf1 = NULL;
 
+#ifdef CONFIG_MACH_TUNA
 	mutex_unlock(&rproc->tlock);
+#endif
 
 	rproc_reset_poolmem(rproc);
 	memset(rproc->memory_maps, 0, sizeof(rproc->memory_maps));
@@ -1715,7 +1937,9 @@ int rproc_register(struct device *dev, const char *name,
 #endif
 	mutex_init(&rproc->lock);
 	mutex_init(&rproc->secure_lock);
+#ifdef CONFIG_MACH_TUNA
 	mutex_init(&rproc->tlock);
+#endif
 	INIT_WORK(&rproc->error_work, rproc_error_work);
 	BLOCKING_INIT_NOTIFIER_HEAD(&rproc->nbh);
 

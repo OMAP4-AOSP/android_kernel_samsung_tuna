@@ -73,7 +73,11 @@ static struct rpmsg_device_id rpmsg_driver_sample_id_table[] = {
 	{ .name	= "rpmsg-client-sample" },
 	{ },
 };
+#ifdef CONFIG_MACH_TUNA
 MODULE_DEVICE_TABLE(platform, rpmsg_driver_sample_id_table);
+#else
+MODULE_DEVICE_TABLE(rpmsg, rpmsg_driver_sample_id_table);
+#endif
 
 static struct rpmsg_driver rpmsg_sample_client_driver = {
 	.drv.name	= KBUILD_MODNAME,

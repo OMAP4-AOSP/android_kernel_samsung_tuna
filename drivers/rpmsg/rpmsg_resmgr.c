@@ -43,7 +43,9 @@
 #define AUX_CLK_MIN	0
 #define AUX_CLK_MAX	5
 #define GPTIMERS_MAX	11
+#ifdef CONFIG_MACH_TUNA
 #define MHZ		1000000
+#endif
 #define MAX_MSG		(sizeof(struct rprm_ack) + sizeof(struct rprm_sdma))
 
 static struct dentry *rprm_dbg;
@@ -209,7 +211,11 @@ static int rprm_auxclk_request(struct rprm_elem *e, struct rprm_auxclk *obj)
 		goto error_aux_src;
 	}
 
+#ifdef CONFIG_MACH_TUNA
 	ret = clk_set_rate(src_parent, (obj->parent_src_clk_rate * MHZ));
+#else
+	ret = clk_set_rate(src_parent, obj->parent_src_clk_rate);
+#endif
 	if (ret) {
 		pr_err("%s: rate not supported by %s\n", __func__,
 					clk_src_name[obj->parent_src_clk]);
@@ -231,7 +237,11 @@ static int rprm_auxclk_request(struct rprm_elem *e, struct rprm_auxclk *obj)
 		goto error_aux_src_parent;
 	}
 
+#ifdef CONFIG_MACH_TUNA
 	ret = clk_set_rate(acd->aux_clk, (obj->clk_rate * MHZ));
+#else
+	ret = clk_set_rate(acd->aux_clk, obj->clk_rate);
+#endif
 	if (ret) {
 		pr_err("%s: rate not supported by %s\n", __func__, clk_name);
 		goto error_aux_enable;
@@ -539,6 +549,9 @@ int _set_constraints(struct rprm_elem *e, struct rprm_constraints_data *c)
 		_set_constraints_func = _rpres_set_constraints;
 		break;
 	case RPRM_IPU:
+#ifndef CONFIG_MACH_TUNA
+	case RPRM_DSP:
+#endif
 		_set_constraints_func = _rproc_set_constraints;
 		break;
 	default:
@@ -896,6 +909,73 @@ out:
 	return ret;
 }
 
+#ifndef CONFIG_MACH_TUNA
+static int _request_max_freq(struct rprm_elem *e, unsigned long *freq)
+{
+	int ret = 0;
+
+	switch (e->type) {
+	case RPRM_IVAHD:
+	case RPRM_FDIF:
+		*freq = rpres_get_max_freq(e->handle);
+		break;
+	default:
+		pr_err("%s: not supported for resource type %d!\n",
+							__func__, e->type);
+		ret = -EINVAL;
+		break;
+	}
+
+	return ret;
+}
+
+static int _request_data(struct rprm_elem *e, int type, void *data, int len)
+{
+	int ret = 0;
+
+	switch (type) {
+	case RPRM_MAX_FREQ:
+		if (len != sizeof(unsigned long)) {
+			ret = -EINVAL;
+			break;
+		}
+		ret = _request_max_freq(e, data);
+		break;
+	default:
+		pr_err("%s: invalid data request %d!\n", __func__, type);
+		ret = -EINVAL;
+		break;
+	}
+
+	return ret;
+}
+
+static int rprm_req_data(struct rprm *rprm, u32 addr, int res_id,
+				void *data, int len)
+{
+	int ret = 0;
+	struct rprm_elem *e;
+	struct rprm_request_data *rd = data;
+
+	mutex_lock(&rprm->lock);
+	if (!idr_find(&rprm->conn_list, addr)) {
+		ret = -ENOTCONN;
+		goto out;
+	}
+
+	e = idr_find(&rprm->id_list, res_id);
+	if (!e || e->src != addr) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	ret = _request_data(e, rd->type, rd->data, len - sizeof(*rd));
+out:
+	mutex_unlock(&rprm->lock);
+	return ret;
+}
+#endif
+
 static void rprm_cb(struct rpmsg_channel *rpdev, void *data, int len,
 			void *priv, u32 src)
 {
@@ -964,6 +1044,19 @@ static void rprm_cb(struct rpmsg_channel *rpdev, void *data, int len,
 		if (ret)
 			dev_err(dev, "rel constraints failed! ret %d\n", ret);
 		return;
+#ifndef CONFIG_MACH_TUNA
+	case RPRM_REQ_DATA:
+		r_sz = len - sizeof(*req);
+		if (r_sz < 0) {
+			r_sz = 0;
+			ret = -EINVAL;
+			break;
+		}
+		ret = rprm_req_data(rprm, src, req->res_id, req->data, r_sz);
+		if (ret)
+			dev_err(dev, "request data failed! ret %d\n", ret);
+		break;
+#endif
 	default:
 		dev_err(dev, "Unknow request\n");
 		ret = -EINVAL;
@@ -1165,7 +1258,11 @@ static struct rpmsg_device_id rprm_id_table[] = {
 	},
 	{ },
 };
+#ifdef CONFIG_MACH_TUNA
 MODULE_DEVICE_TABLE(platform, rprm_id_table);
+#else
+MODULE_DEVICE_TABLE(rpmsg, rprm_id_table);
+#endif
 
 static struct rpmsg_driver rprm_driver = {
 	.drv.name	= KBUILD_MODNAME,

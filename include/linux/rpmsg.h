@@ -72,6 +72,9 @@ enum {
 	VPROC_BUF_SZ,
 	VPROC_SIM_BASE,
 	VPROC_STATIC_CHANNELS,
+#ifndef CONFIG_MACH_TUNA
+	VPROC_RPROC_REF,
+#endif
 };
 
 #define RPMSG_ADDR_ANY		0xFFFFFFFF
@@ -149,6 +152,10 @@ struct rpmsg_endpoint *rpmsg_create_ept(struct rpmsg_channel *,
 
 int
 rpmsg_send_offchannel_raw(struct rpmsg_channel *, u32, u32, void *, int, bool);
+
+#ifndef CONFIG_MACH_TUNA
+struct rproc *rpmsg_get_rproc_handle(struct rpmsg_channel *);
+#endif
 
 static inline
 int rpmsg_send_offchannel(struct rpmsg_channel *rpdev, u32 src, u32 dst,

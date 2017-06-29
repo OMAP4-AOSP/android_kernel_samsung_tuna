@@ -103,7 +103,12 @@ enum fw_resource_type {
 	RSC_TRACE	= 4,
 	RSC_BOOTADDR	= 5,
 	RSC_CRASHDUMP	= 6,
+#ifndef CONFIG_MACH_TUNA
 	RSC_END		= 7,
+#else
+	RSC_SUSPENDADDR	= 7,
+	RSC_END		= 8,
+#endif
 };
 
 /**
@@ -160,6 +165,9 @@ struct rproc_ops {
 	int (*watchdog_init)(struct rproc *, int (*)(struct rproc *));
 	int (*watchdog_exit)(struct rproc *);
 	void (*dump_registers)(struct rproc *);
+#ifndef CONFIG_MACH_TUNA
+	int (*pm_init)(struct rproc *rproc, u64 suspaddr);
+#endif
 };
 
 /*
@@ -201,6 +209,13 @@ enum rproc_state {
  *		  POS_SUSPEND event.
  *
  * @RPROC_SECURE: remote processor secure mode has changed.
+ *
+ * @RPROC_LOAD_ERROR: an error has occurred during loading the remote processor
+ *                    binary. users can use this event to release any resources
+ *                    acquired after a request to start the processor.
+ *
+ * @RPROC_PRELOAD: users can register for this event to perform any actions
+ *                 before the remoteproc starts loading the binary into memory.
  */
 enum rproc_event {
 	RPROC_ERROR,
@@ -208,6 +223,10 @@ enum rproc_event {
 	RPROC_POS_SUSPEND,
 	RPROC_RESUME,
 	RPROC_SECURE,
+#ifndef CONFIG_MACH_TUNA
+	RPROC_LOAD_ERROR,
+	RPROC_PRELOAD,
+#endif
 };
 
 #define RPROC_MAX_NAME	100
@@ -268,7 +287,9 @@ struct rproc {
 	int last_trace_len0, last_trace_len1;
 	void *cdump_buf0, *cdump_buf1;
 	int cdump_len0, cdump_len1;
+#ifdef CONFIG_MACH_TUNA
 	struct mutex tlock;
+#endif
 	struct completion firmware_loading_complete;
 	struct work_struct error_work;
 	struct blocking_notifier_head nbh;
@@ -301,6 +322,10 @@ int rproc_register(struct device *, const char *, const struct rproc_ops *,
 		unsigned int timeout);
 int rproc_unregister(const char *);
 void rproc_last_busy(struct rproc *);
+#ifndef CONFIG_MACH_TUNA
+int rproc_da_to_pa(struct rproc *, u64, phys_addr_t *);
+int rproc_pa_to_da(struct rproc *, phys_addr_t, u64 *);
+#endif
 #ifdef CONFIG_REMOTE_PROC_AUTOSUSPEND
 extern const struct dev_pm_ops rproc_gen_pm_ops;
 #define GENERIC_RPROC_PM_OPS	(&rproc_gen_pm_ops)
