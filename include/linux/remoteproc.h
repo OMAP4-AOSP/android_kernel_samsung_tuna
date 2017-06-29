@@ -270,7 +270,7 @@ struct rproc {
 	int cdump_len0, cdump_len1;
 	struct mutex tlock;
 	struct completion firmware_loading_complete;
-	struct work_struct error_work, unload_work;
+	struct work_struct error_work;
 	struct blocking_notifier_head nbh;
 	struct completion error_comp;
 #ifdef CONFIG_REMOTE_PROC_AUTOSUSPEND

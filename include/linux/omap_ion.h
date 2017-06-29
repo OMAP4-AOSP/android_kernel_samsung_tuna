@@ -56,12 +56,6 @@ int omap_ion_share_fd_to_buffers(int fd, struct ion_buffer **buffers,
 int omap_tiler_vinfo(struct ion_client *client,
 			struct ion_handle *handle, unsigned int *vstride,
 			unsigned int *vsize);
-#ifdef CONFIG_CMA
-bool omap_ion_ipu_allocate_memory(void);
-bool omap_ion_ipu_free_memory(void);
-bool omap_ion_rpmsg_allocate_memory(void);
-bool omap_ion_rpmsg_free_memory(void);
-#endif
 #endif /* __KERNEL__ */
 
 /* additional heaps used only on omap */
