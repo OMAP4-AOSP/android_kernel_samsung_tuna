@@ -6039,7 +6039,11 @@ static struct omap_hwmod_addr_space omap44xx_usbhs_ohci_addrs[] = {
 		.name		= "ohci",
 		.pa_start	= 0x4A064800,
 		.pa_end		= 0x4A064BFF,
+#ifdef CONFIG_MACH_TUNA
 		.flags		= ADDR_MAP_ON_INIT | ADDR_TYPE_RT
+#else
+		.flags		= ADDR_MAP_ON_INIT
+#endif
 	}
 };
 

@@ -31,6 +31,14 @@ struct usbhs_omap_board_data {
 	/* have to be valid if phy_reset is true and portx is in phy mode */
 	int	reset_gpio_port[OMAP3_HS_USB_PORTS];
 
+#ifndef CONFIG_MACH_TUNA
+	/*
+	 * have to be valid if HSIC disconnect feature needed
+	 * and portx is in HSIC mode
+	 */
+	int	hsic_aux_port[OMAP3_HS_USB_PORTS];
+#endif
+
 	/* Set this to true for ES2.x silicon */
 	unsigned			es2_compatibility:1;
 
@@ -51,6 +59,9 @@ struct usbhs_omap_board_data {
 struct ehci_hcd_omap_platform_data {
 	enum usbhs_omap_port_mode	port_mode[OMAP3_HS_USB_PORTS];
 	int				reset_gpio_port[OMAP3_HS_USB_PORTS];
+#ifndef CONFIG_MACH_TUNA
+	int				hsic_aux_port[OMAP3_HS_USB_PORTS];
+#endif
 	struct regulator		*regulator[OMAP3_HS_USB_PORTS];
 	unsigned			phy_reset:1;
 	/*
