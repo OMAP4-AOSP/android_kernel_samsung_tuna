@@ -22,7 +22,6 @@
 #include <mach/omap4_ion.h>
 
 /* Hardcoded Ducati heap address. */
-#define TUNA_DUCATI_HEAP_ADDR 0xba300000
 #define ESPRESSO_DUCATI_HEAP_ADDR 0xbae00000
 
 /*
@@ -146,12 +145,7 @@ void __init omap_ion_init(void)
 		omap4_ion_heap_nonsec_tiler_mem_size = 0;
 		omap4_ion_heap_tiler_mem_size = 0;
 	} else {
-#if defined(CONFIG_ION_OMAP_IPU_MEM_IOBUFS_SIZE) && CONFIG_ION_OMAP_IPU_MEM_IOBUFS_SIZE > 0
-		omap4_ion_heap_secure_input_size =
-				(SZ_1M * CONFIG_ION_OMAP_IPU_MEM_IOBUFS_SIZE);
-#else
 		omap4_ion_heap_secure_input_size = omap4_ion_pdata.tiler1d_size;
-#endif
 		omap4_ion_heap_secure_output_wfdhdcp_size =
 				omap4_ion_pdata.secure_output_wfdhdcp_size;
 		omap4_ducati_heap_size = omap4_ion_pdata.ducati_heap_size;
@@ -168,12 +162,8 @@ void __init omap_ion_init(void)
 	/* carveout addresses */
 	omap4_smc_addr = PLAT_PHYS_OFFSET + omap_total_ram_size() -
 				omap4_smc_size;
-#ifdef CONFIG_MACH_TUNA /* fixed start address of ducati heap */
-	omap4_ion_heap_secure_input_addr = TUNA_DUCATI_HEAP_ADDR;
-#else
 	omap4_ion_heap_secure_input_addr = omap4_smc_addr -
 				omap4_ion_heap_secure_input_size;
-#endif
 	omap4_ion_heap_secure_output_wfdhdcp_addr =
 				omap4_ion_heap_secure_input_addr -
 				omap4_ion_heap_secure_output_wfdhdcp_size;

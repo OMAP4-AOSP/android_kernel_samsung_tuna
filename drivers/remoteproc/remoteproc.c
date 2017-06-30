@@ -746,7 +746,7 @@ static void rproc_reset_poolmem(struct rproc *rproc)
 	pool->cur_size = pool->mem_size;
 }
 
-static int rproc_add_mem_entry(struct rproc *rproc, struct fw_resource *rsc, u32 rsc_len)
+static int rproc_add_mem_entry(struct rproc *rproc, struct fw_resource *rsc)
 {
 	struct rproc_mem_entry *me = rproc->memory_maps;
 	int i = 0;
@@ -764,7 +764,7 @@ static int rproc_add_mem_entry(struct rproc *rproc, struct fw_resource *rsc, u32
 	if (!ret) {
 		me->da = rsc->da;
 		me->pa = (phys_addr_t)rsc->pa;
-		me->size = rsc_len;
+		me->size = rsc->len;
 #ifdef CONFIG_REMOTEPROC_CORE_DUMP
 		/* FIXME: ION heaps are reported as RSC_CARVEOUT.  We need a
 		 * better way to understand which sections are for
@@ -826,7 +826,6 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 	u64 trace_da1 = 0;
 	u64 cdump_da0 = 0;
 	u64 cdump_da1 = 0;
-	u32 rsc_len = 0;
 	int ret = 0;
 
 	while (len >= sizeof(*rsc) && !ret) {
@@ -878,7 +877,7 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 			*bootaddr = da;
 			break;
 		case RSC_DEVMEM:
-			ret = rproc_add_mem_entry(rproc, rsc, rsc->len);
+			ret = rproc_add_mem_entry(rproc, rsc);
 			if (ret) {
 				dev_err(dev, "can't add mem_entry %s\n",
 							rsc->name);
@@ -886,15 +885,8 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 			}
 			break;
 		case RSC_CARVEOUT:
-			rsc_len = rsc->len;
-#if defined(CONFIG_ION_OMAP_IPU_MEM_IOBUFS_SIZE) && CONFIG_ION_OMAP_IPU_MEM_IOBUFS_SIZE > 0
-			if (!strncmp("IPU_MEM_IOBUFS", rsc->name, 14)) {
-				dev_info(dev, "overriding IPU_MEM_IOBUFS size to %dMB\n", CONFIG_ION_OMAP_IPU_MEM_IOBUFS_SIZE);
-				rsc_len = CONFIG_ION_OMAP_IPU_MEM_IOBUFS_SIZE * SZ_1M;
-			}
-#endif
 			if (!pa) {
-				ret = rproc_alloc_poolmem(rproc, rsc_len, &pa);
+				ret = rproc_alloc_poolmem(rproc, rsc->len, &pa);
 				if (ret) {
 					dev_err(dev, "can't alloc poolmem %s\n",
 								rsc->name);
@@ -902,7 +894,7 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 				}
 				rsc->pa = pa;
 			} else {
-				ret = rproc_check_poolmem(rproc, rsc_len, pa);
+				ret = rproc_check_poolmem(rproc, rsc->len, pa);
 				if (ret) {
 					dev_err(dev, "static memory for %s "
 						"doesn't belong to poolmem\n",
@@ -910,7 +902,7 @@ static int rproc_handle_resources(struct rproc *rproc, struct fw_resource *rsc,
 					break;
 				}
 			}
-			ret = rproc_add_mem_entry(rproc, rsc, rsc_len);
+			ret = rproc_add_mem_entry(rproc, rsc);
 			if (ret) {
 				dev_err(dev, "can't add mem_entry %s\n",
 							rsc->name);

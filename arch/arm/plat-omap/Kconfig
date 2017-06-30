@@ -306,12 +306,6 @@ config ION_OMAP_TILER_DYNAMIC_ALLOC
 	depends on ION_OMAP
 	default n
 
-config ION_OMAP_IPU_MEM_IOBUFS_SIZE
-	int "Carveout size override for IPU_MEM_IOBUFS section of Ducati firmware."
-	range 0 90
-	depends on ION_OMAP
-	default 0
-
 endmenu
 
 endif
