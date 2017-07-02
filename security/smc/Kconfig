@@ -26,7 +26,7 @@ config SECURITY_MIDDLEWARE_COMPONENT
 config SMC_KERNEL_CRYPTO
 	bool "Register SMC into kernel crypto subsytem"
 	depends on SECURITY_MIDDLEWARE_COMPONENT
-	default y
+	default n
 	help
 	  This option enables crypto subsystem to use SMC and OMAP hardware
 	  accelerators.
