@@ -1412,8 +1412,10 @@ static void __init tuna_reserve(void)
 	tuna_android_display_setup(NULL);
 #endif
 
+#ifdef CONFIG_OMAP_RAM_CONSOLE
 	omap_ram_console_init(OMAP_RAM_CONSOLE_START_DEFAULT,
 				OMAP_RAM_CONSOLE_SIZE_DEFAULT);
+#endif
 
 #ifndef CONFIG_CMA
 	/* do the static reservations first */
