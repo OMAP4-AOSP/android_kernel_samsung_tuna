@@ -38,8 +38,8 @@
 #ifdef CONFIG_MFD_OMAP_USB_HOST
 
 #define OMAP_USBHS_DEVICE	"usbhs_omap"
-#define	USBHS_UHH_HWMODNAME	"usbhs_uhh"
-#define	USBHS_OHCI_HWMODNAME	"usbhs_ohci"
+#define USBHS_UHH_HWMODNAME	"usbhs_uhh"
+#define USBHS_OHCI_HWMODNAME	"usbhs_ohci"
 #define USBHS_EHCI_HWMODNAME	"usbhs_ehci"
 #define USBHS_TLL_HWMODNAME	"usbhs_tll"
 

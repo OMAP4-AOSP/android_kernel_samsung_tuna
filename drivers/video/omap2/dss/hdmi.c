@@ -65,7 +65,6 @@ static bool pm_qos_handle_added;
 #define EDID_SIZE_BLOCK1_TIMING_DESCRIPTOR	4
 
 #define OMAP_HDMI_TIMINGS_NB			34
-
 #define HDMI_DEFAULT_REGN 15
 #define HDMI_DEFAULT_REGM2 1
 
@@ -417,6 +416,7 @@ static void hdmi_load_hdcp_keys(struct omap_dss_device *dssdev)
 	}
 
 }
+
 /* Set / Release c-state constraints */
 static void hdmi_set_l3_cstr(struct omap_dss_device *dssdev, bool enable)
 {

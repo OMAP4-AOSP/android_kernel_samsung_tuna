@@ -260,7 +260,7 @@ struct dss2_decim {
  *
  * Do this for each overlay before attempting to configure DSS.
  *
- * 2) configure DSS pipelines for display/manager using DSSCOMP_SETUP_MANAGER
+ * 2) configure DSS pipelines for display/manager using DSSCIOC_SETUP_MANAGER
  * ioctl.  You can delay applying the settings until an dss2_manager_apply()
  * is called for the internal composition object, if the APPLY bit of setup mode
  * is not set.  However the CAPTURE/DISPLAY bits of the setup mode settings will
@@ -570,7 +570,7 @@ struct dsscomp_setup_dispc_data {
 
 /*
  * ioctl: DSSCIOC_WB_COPY, struct dsscomp_wb_copy_data
- *,
+ *
  * Requirements:
  *	wb.ix must be OMAP_DSS_WB.
  *
