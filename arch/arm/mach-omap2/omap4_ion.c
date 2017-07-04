@@ -108,9 +108,6 @@ void __init omap_ion_init(void)
 {
 	int i;
 	int ret;
-#ifndef CONFIG_ION_OMAP_TILER_DYNAMIC_ALLOC
-	u32 nonsecure = omap4_ion_pdata.nonsecure_tiler2d_size;
-#endif
 
 	system_512m = (omap_total_ram_size() == SZ_512M);
 
